@@ -1,2 +1,153 @@
 # fascicle
-A Python framework for reading, writing, and managing neuroscience datasets, built around the BIDS standard with native support for FreeSurfer and SimNIBS outputs.
+
+Fascicle is a Python framework for reading, writing and managing neuroscience datasets. It is built around the BIDS standard and supports outputs from FreeSurfer, MNE-Python and SimNIBS.
+
+The core of Fascicle reads and writes raw BIDS datasets. Extensions handle common neuroimaging derivatives, such as those from FreeSurfer, MNE-Python and SimNIBS CHARM. These extensions use the same small framework that you can use to write your own extensions, and you can replace any reader or writer with your own.
+
+## Install
+
+```bash
+pip install fascicle          # raw BIDS + MRI/surfaces/tractograms, FreeSurfer, SimNIBS charm
+pip install "fascicle[mne]"   # + MNE-Python source-analysis derivatives
+```
+
+## Quickstart
+
+```python
+from fascicle import DatasetManager
+from fascicle.extensions import freesurfer, mne
+
+dm = DatasetManager("/data/my_study/rawdata")    # no config needed
+dm.get_subjects()                                # ['01', '02', ...]
+
+img = dm.load("01", "T1w", session="test")       # nibabel image
+dm.save(img, "01", "T1w", session="retest")      # writes sub-01/ses-retest/anat/sub-01_ses-retest_T1w.nii.gz
+
+dm.add_datatype("bold", "raw", dm.bids_namer("bold"))   # any other raw BIDS suffix
+bold = dm.load("01", "bold", session="test", task="rest")
+
+freesurfer.register(dm, root_path="/data/my_study/derivatives/freesurfer")
+lh_coords, lh_faces = dm.load("01", "fs-pial", hemi="lh")
+
+mne.register(dm, root_path="/data/my_study/derivatives/mne")
+dm.save(cov, "01", "mne-cov", task="rest")       # sub-01/cov/sub-01_task-rest_cov.fif
+```
+
+`dm.get_path(...)` takes the same arguments as `load` and returns the path without touching the file.
+
+## Concepts
+
+- **Roots**: named folders (`dm.roots`). `"raw"` is the BIDS dataset; extensions add their own (`"fs"`, `"mne"`, ...) with `add_root`.
+- **Datatypes**: every key in `dm.registry` (`"T1w"`, `"fs-pial"`, `"mne-cov"`) is a `Datatype` with
+  - a **namer**, `namer(root, subject, **inputs) -> Path`, which only builds the path, so the same namer works for loading and saving. Inputs are BIDS entities (`session`, `task`, ...) or tool-specific ones (`hemi`);
+  - a **reader**, `reader(path) -> data`;
+  - a **writer**, `writer(data, path)`.
+
+  A missing reader or writer means "use the one registered for the file extension". `dm.describe("fs-pial")` shows all of this for one key.
+- **File extensions**: `dm.ext_readers` / `dm.ext_writers` map extensions to default readers/writers: nibabel for images and tractograms (`.nii`, `.nii.gz`, `.mgh`, `.mgz`, `.gii`, `.trk`, `.tck`), the standard library for `.json` sidecars (read as dicts), numpy for `.bval`/`.bvec`, and pandas for `.tsv`/`.tsv.gz` tables (read as DataFrames, with BIDS's `n/a` as missing values).
+- **References**: single files outside any subject (templates, atlases, lookup tables) loaded with `load_ref`. Each reference is read by file extension unless you give it its own reader, with `add_reference(key, path, reader=...)` or, for references from the config file, `set_ref_reader(key, reader)`. References have no writer: they're inputs, not outputs.
+- **Config file** (optional): the declarative way to set up roots and references:
+
+  ```yaml
+  DIR_RAW: /data/my_study/rawdata          # -> "raw" root (a raw_root argument wins if both are given)
+  DIR_TEMPLATES: /data/templates           # available as dm.config["DIR_TEMPLATES"] for add_root
+  MRI_REF: /data/templates/MNI152.nii.gz   # any key containing "REF" becomes a reference: dm.load_ref("MRI_REF")
+  ```
+
+  `DatasetManager(config="config.yaml")`. Reading a config with `env=True` (the `read_config` default) also exports every top-level key as an environment variable.
+
+`save` refuses to replace an existing file unless you pass `overwrite=True`, creates missing folders, and raises `TypeError` for read-only datatypes.
+
+## Extensions
+
+| extension | keys (default prefix) | extra dependency |
+|---|---|---|
+| `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only) | none |
+| `fascicle.extensions.charm` | `charm-seg`, `charm-t1` | none |
+| `fascicle.extensions.mne` | `mne-src`, `mne-fwd`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc` | `mne` |
+
+Every extension has the same `register(dm, root_key=..., root_path=None, namespace=None, readers=None, writers=None)`. Keys are prefixed with `namespace`, which defaults to `root_key`. To compare two FreeSurfer runs, register twice: `freesurfer.register(dm, root_key="fs_run2", root_path=...)` gives `fs_run2-t1`, ...
+
+## Swapping a reader or writer
+
+```python
+import ants
+
+def ants_reader(path):
+    return ants.image_read(str(path))
+
+# One datatype:
+dm.set_reader("T1w", ants_reader)
+freesurfer.register(dm, root_path=..., readers={"t1": ants_reader})   # at registration
+
+# Every file of one type (raw BIDS, FreeSurfer, charm, ... alike):
+dm.add_extension(".nii.gz", reader=ants_reader)
+```
+
+`set_writer`, `writers={...}` and `add_extension(..., writer=...)` work the same way. Mark a datatype read-only with `Datatype.READ_ONLY` as its writer.
+
+## Writing your own extension
+
+An extension is a table of `Datatype`s plus a `register` function. This is exactly how the built-in extensions are written. For BIDS-style names, build the namers with `derivative_namer`:
+
+```python
+# my_lab/resection.py
+from fascicle import Datatype, derivative_namer, register_extension
+
+
+def read_notes(path):
+    return path.read_text()
+
+
+def write_notes(text, path):
+    path.write_text(text)
+
+
+DATATYPES = {
+    # nibabel by extension; the .json sidecar goes through the JSON reader/writer
+    "mask": Datatype(derivative_namer("mask", datatype="anat", extensions=(".nii.gz", ".json"))),
+    "notes": Datatype(
+        derivative_namer("notes", datatype="anat", extensions=(".txt",), entities=("session", "desc")),
+        read_notes,
+        write_notes,
+    ),
+}
+
+
+def register(dm, root_key="resec", root_path=None, namespace=None, readers=None, writers=None):
+    register_extension(dm, DATATYPES, root_key=root_key, root_path=root_path,
+                       namespace=namespace, readers=readers, writers=writers)
+```
+
+```python
+resection.register(dm, root_path="/data/my_study/derivatives/resection")
+dm.save(mask_img, "01", "resec-mask", session="postop", desc="manual")
+# -> derivatives/resection/sub-01/ses-postop/anat/sub-01_ses-postop_desc-manual_mask.nii.gz
+mask = dm.load("01", "resec-mask", session="postop", desc="manual")
+```
+
+### BIDS-style names with `derivative_namer`
+
+`derivative_namer(suffix, datatype=None, extensions=(".nii.gz",), entities=None, extra_entities=(), fixed=None)` accepts any suffix, folder and extension:
+
+- **`datatype`** is the folder under `sub-XX[/ses-YY]/`. Pass `None` to put files directly in it.
+- **`extensions`**: the first one is the default; ask for another with `extension=`, e.g. a `.json` sidecar. `None` builds extensionless stems.
+- **`entities`** restricts which BIDS entities the datatype takes. By default it takes all of them, using pybids' names (`session`, `acquisition`, `desc`, ...).
+- **`extra_entities=("cut",)`** adds your own entities, written as `_cut-<value>` just before `desc`.
+- **`fixed={"signal": "virtual"}`** gives an entity one value for this datatype: it's always written and callers can't pass it. Use it to give variants of a file their own keys while keeping one suffix. For example, the MNE extension's `mne-i-ave` / `mne-v-ave` are `ave` files with `signal-intracranial` / `signal-virtual`.
+
+Entities are always written in the BIDS spec's order, whatever order you pass them in. Anything the namer wasn't declared with raises `ValueError` instead of being dropped. So do values the spec forbids, such as `desc="brain-mask"`, `run="one"` or `hemi="lh"` (BIDS uses `L`/`R`). `fascicle.bids_pattern(...)` shows the pybids pattern a namer fills.
+
+`dm.bids_namer(suffix)` is the raw-BIDS counterpart: it knows the raw spec (T1w lives in `anat/`, bold in `func/`), but only accepts raw suffixes and entities. A derivative entity such as `desc` raises and points you to `derivative_namer`.
+
+Namers don't have to be BIDS-style: any `namer(root, subject, **inputs) -> Path` works (see `fascicle.extensions.freesurfer`). For a one-off datatype, skip the module: `dm.add_root(...)` and `dm.add_datatype(key, root_key, namer, reader, writer)`. You can also subclass `DatasetManager` and register everything in `__init__`.
+
+## Caveats
+
+- **Not picklable.** `DatasetManager` wraps a `bids.BIDSLayout`, which can't be pickled. Don't pass a manager to `multiprocessing`/`joblib` workers. Resolve paths with `get_path` (or load data) in the parent process and pass those instead.
+- **The BIDS index isn't refreshed after `save`.** Files you write are loadable by path straight away, but `get_subjects()` and `dm.layout` queries only see them in a new `DatasetManager`.
+- **Extensions don't index their folders.** Namers build paths without looking at the disk, so they can write into folders that don't exist yet. For pybids queries on a derivatives folder, also call `dm.add_derivatives(key, path)` once it has a `dataset_description.json`. pybids doesn't parse custom entities (such as MNE's `signal`), so you can't filter on them in pybids queries; Fascicle's own `load`/`save` handle them fully.
+
+## Example
+
+`examples/tutorial.ipynb` downloads one subject of OpenNeuro's `ds000114`, loads its T1w and BOLD with nibabel, then switches T1w to ANTsPy. Run `pip install -e ".[examples]"` first.

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fascicle"
+version = "0.1.0"
+description = "A reusable, BIDS-native DatasetManager core with pluggable readers for neuroimaging datasets."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Herve Nino", email = "herve.nino@gmail.com" },
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pybids",
+    "pyyaml",
+    "numpy",
+    "nibabel",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+mne = ["mne"]
+all = ["fascicle[mne]"]
+test = ["pytest"]
+examples = ["openneuro-py", "matplotlib", "jupyter", "antspyx"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fascicle"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Disable the "dash" pytest plugin some environments have autoloaded from
+# user site-packages (dash.testing.plugin) — it fails to import when
+# `blinker` isn't installed and has nothing to do with this project.
+addopts = "-p no:dash"
