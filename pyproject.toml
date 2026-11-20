@@ -3,15 +3,26 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fascicle"
+# Distribution name on PyPI ("fascicle" is taken by an unrelated project);
+# the import name stays `fascicle`.
+name = "mindmap-fascicle"
 version = "0.1.0"
-description = "A reusable, BIDS-native DatasetManager core with pluggable readers for neuroimaging datasets."
+description = "Read and write BIDS neuroimaging datasets, with extensions for FreeSurfer, SimNIBS charm and MNE-Python derivatives."
 readme = "README.md"
 license = "MIT"
 authors = [
     { name = "Herve Nino", email = "herve.nino@gmail.com" },
 ]
 requires-python = ">=3.10"
+keywords = ["BIDS", "neuroimaging", "MRI", "FreeSurfer", "MNE", "SimNIBS", "derivatives"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 dependencies = [
     "pybids",
     "pyyaml",
@@ -22,12 +33,21 @@ dependencies = [
 
 [project.optional-dependencies]
 mne = ["mne"]
-all = ["fascicle[mne]"]
+all = ["mindmap-fascicle[mne]"]
 test = ["pytest"]
 examples = ["openneuro-py", "matplotlib", "jupyter", "antspyx"]
 
+[project.urls]
+Homepage = "https://github.com/NinoHerve/mindmap-fascicle"
+Repository = "https://github.com/NinoHerve/mindmap-fascicle"
+Issues = "https://github.com/NinoHerve/mindmap-fascicle/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/fascicle"]
+
+[tool.hatch.build.targets.sdist]
+# The tutorial notebook embeds plot images (~0.5 MB); it stays on GitHub.
+exclude = ["examples/", ".vscode/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

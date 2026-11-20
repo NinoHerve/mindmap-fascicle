@@ -23,7 +23,7 @@ exist yet (writing into a fresh derivatives folder works). For pybids
 queries on top, also call `dm.add_derivatives(root_key, root_path)` once
 the folder has a `dataset_description.json`.
 
-`mne` is an optional dependency (`pip install fascicle[mne]`): it's only
+`mne` is an optional dependency (`pip install "mindmap-fascicle[mne]"`): it's only
 imported when a file is actually read or written.
 """
 
@@ -43,7 +43,7 @@ def _mne():
         import mne
     except ImportError as err:  # pragma: no cover - exercised only without mne
         raise ImportError(
-            "Reading/writing MNE derivatives needs mne: pip install fascicle[mne]"
+            "Reading/writing MNE derivatives needs mne: pip install 'mindmap-fascicle[mne]'"
         ) from err
     return mne
 

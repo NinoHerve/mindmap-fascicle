@@ -7,9 +7,11 @@ The core of Fascicle reads and writes raw BIDS datasets. Extensions handle commo
 ## Install
 
 ```bash
-pip install fascicle          # raw BIDS + MRI/surfaces/tractograms, FreeSurfer, SimNIBS charm
-pip install "fascicle[mne]"   # + MNE-Python source-analysis derivatives
+pip install mindmap-fascicle          # raw BIDS + MRI/surfaces/tractograms, FreeSurfer, SimNIBS charm
+pip install "mindmap-fascicle[mne]"   # + MNE-Python source-analysis derivatives
 ```
+
+The package installs as `mindmap-fascicle` but is imported as `fascicle`.
 
 ## Quickstart
 
