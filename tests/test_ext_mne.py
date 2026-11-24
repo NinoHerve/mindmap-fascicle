@@ -71,6 +71,43 @@ def test_register_keys(dm):
     expected = {f"mne-{name}" for name in ("src", "fwd", "ave", "i-ave", "v-ave", "cov", "stc")}
 
     assert expected <= set(dm.registry)
+    assert {"meg", "eeg", "meg-info"} <= set(dm.registry)
+
+
+def test_raw_keys_are_on_raw_root_and_read_only(dm, bids_root):
+    for key in ("meg", "eeg", "meg-info"):
+        info = dm.describe(key)
+        assert info["root_key"] == "raw"
+        assert info["root"] == bids_root
+        assert info["writer"] == "READ_ONLY"
+
+
+def test_register_raw_false_skips_raw_keys(bids_root, tmp_path):
+    manager = DatasetManager(bids_root)
+    mne_ext.register(manager, root_path=tmp_path / "mne", raw=False)
+
+    assert not {"meg", "eeg", "meg-info"} & set(manager.registry)
+
+
+def test_register_twice_under_two_roots_keeps_one_set_of_raw_keys(dm, tmp_path):
+    mne_ext.register(dm, root_key="mne2", root_path=tmp_path / "mne2")
+
+    assert "mne2-cov" in dm.registry
+    assert "mne2-meg" not in dm.registry
+
+
+def test_eeg_finds_header_not_companions(raw_root, tmp_path):
+    manager = DatasetManager(raw_root)
+    mne_ext.register(manager, root_path=tmp_path / "mne")
+
+    assert manager.get_path("01", "eeg", task="x").name == "sub-01_task-x_eeg.vhdr"
+
+
+def test_meg_finds_ctf_folder(raw_root, tmp_path):
+    manager = DatasetManager(raw_root)
+    mne_ext.register(manager, root_path=tmp_path / "mne")
+
+    assert manager.get_path("01", "meg", session="a", task="y").suffix == ".ds"
 
 
 def test_register_does_not_require_existing_folder(dm, tmp_path):
@@ -132,3 +169,59 @@ def test_stc_round_trip_and_stem_exists_check(dm, mne):
 def test_load_missing_stc_raises_file_not_found(dm, mne):
     with pytest.raises(FileNotFoundError):
         dm.load("01", "mne-stc", task="none")
+
+
+@pytest.fixture
+def meg_dm(bids_root, tmp_path, mne):
+    """A manager over `bids_root` plus one real FIF MEG run, `run-01`."""
+    info = mne.create_info(["MEG 0111", "MEG 0112", "EEG 001"], 100.0, ["mag", "grad", "eeg"])
+    data = np.arange(30, dtype=float).reshape(3, 10) * 1e-12
+    meg = bids_root / "sub-01" / "ses-a" / "meg"
+    meg.mkdir(parents=True)
+    raw = mne.io.RawArray(data, info, verbose="warning")
+    raw.save(meg / "sub-01_ses-a_task-x_run-01_meg.fif", verbose="warning")
+
+    manager = DatasetManager(bids_root)
+    mne_ext.register(manager, root_path=tmp_path / "derivatives" / "mne")
+    return manager, data
+
+
+def test_meg_load_is_lazy_raw(meg_dm):
+    dm, data = meg_dm
+
+    raw = dm.load("01", "meg", session="a", task="x", run=1)
+
+    assert raw.preload is False
+    np.testing.assert_array_almost_equal(raw.get_data(), data)
+
+
+def test_meg_info_reads_only_info(meg_dm, mne):
+    dm, _ = meg_dm
+
+    info = dm.load("01", "meg-info", session="a", task="x", run=1)
+
+    assert isinstance(info, mne.Info)
+    assert info["ch_names"] == ["MEG 0111", "MEG 0112", "EEG 001"]
+
+
+def test_meg_info_falls_back_to_raw_header_for_other_formats(monkeypatch, mne, tmp_path):
+    class FakeRaw:
+        info = "header info"
+
+    calls = []
+
+    def fake_read_raw(path, preload, verbose):
+        calls.append(preload)
+        return FakeRaw()
+
+    monkeypatch.setattr(mne.io, "read_raw", fake_read_raw)
+
+    assert mne_ext._read_info(tmp_path / "sub-01_task-x_meg.ds") == "header info"
+    assert calls == [False]
+
+
+def test_meg_save_refused(meg_dm):
+    dm, _ = meg_dm
+
+    with pytest.raises(TypeError, match="read-only"):
+        dm.save(object(), "01", "meg", session="a", task="x", run=1, overwrite=True)

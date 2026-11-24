@@ -4,7 +4,7 @@ from functools import partial
 
 import pytest
 
-from fascicle import DatasetManager, Datatype, register_extension
+from fascicle import DatasetManager, Datatype, RawDatatype, register_extension, register_raw
 
 
 def _namer(root, subject, datatype):
@@ -127,3 +127,52 @@ def test_save_through_extension_round_trip(bids_root, toy_root):
 
     assert path == toy_root / "sub-01_a.txt"
     assert dm.load("01", "toy-a") == "A!"
+
+
+# --- register_raw -------------------------------------------------------------
+
+def _read_raw(path):
+    return "read"
+
+
+RAW = {"bar": RawDatatype("bar", reader=_read_raw)}
+
+
+def test_register_raw_unprefixed_on_raw_root(raw_root):
+    dm = DatasetManager(raw_root)
+    register_raw(dm, RAW)
+
+    assert dm.registry["bar"].root_key == "raw"
+    assert dm.load("01", "bar") == "read"
+
+
+def test_register_raw_same_entry_twice_is_a_no_op(raw_root):
+    dm = DatasetManager(raw_root)
+    register_raw(dm, RAW)
+    first = dm.registry["bar"]
+    register_raw(dm, {"bar": RawDatatype("bar", reader=_read_raw)})
+
+    assert dm.registry["bar"] is first
+
+
+def test_register_raw_conflicting_entry_raises(raw_root):
+    dm = DatasetManager(raw_root)
+    register_raw(dm, RAW)
+
+    with pytest.raises(ValueError, match="already registered"):
+        register_raw(dm, {"bar": RawDatatype("bar", reader=lambda p: "other")})
+
+
+def test_register_raw_does_not_replace_core_datatype(raw_root):
+    dm = DatasetManager(raw_root)
+
+    with pytest.raises(ValueError, match="T1w"):
+        register_raw(dm, {"T1w": RawDatatype("T1w")})
+
+
+def test_register_raw_overwrite_replaces(raw_root):
+    dm = DatasetManager(raw_root)
+    register_raw(dm, RAW)
+    register_raw(dm, {"bar": RawDatatype("bar", reader=lambda p: "other")}, overwrite=True)
+
+    assert dm.load("01", "bar") == "other"

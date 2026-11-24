@@ -1,7 +1,24 @@
-"""MNE-Python extension: source-analysis derivatives with BIDS-style names.
+"""MNE-Python extension: raw MEG/EEG and source-analysis derivatives.
 
-Registers `src`, `fwd`, `ave`, `i-ave`, `v-ave`, `cov` and `stc` (keys
-`mne-src`, `mne-cov`, ... by default) under one derivatives root, named with
+Raw recordings (unprefixed keys, in the raw BIDS dataset):
+
+    meg        MEG recording, `mne.io.Raw` (not preloaded)
+    eeg        EEG recording, `mne.io.Raw` (not preloaded)
+    meg-info   measurement info of the MEG recording, `mne.Info`: sensors,
+               digitisation and `dev_head_t`, all a forward model needs,
+               without opening the recording
+
+These are found through the BIDS index (`DatasetManager.add_raw`), so any
+format `mne.io.read_raw` reads works whatever its extension, and `run=1`
+matches `run-01`:
+
+    dm.load("01", "meg-info", session="meg", task="facerecognition", run=1)
+
+They're read-only. Pass `raw=False` to `register` to skip them.
+
+Derivatives (prefixed keys, in the extension's own folder): `src`, `fwd`,
+`ave`, `i-ave`, `v-ave`, `cov` and `stc` (keys `mne-src`, `mne-cov`, ... by
+default) live under one derivatives root, named with
 `fascicle.derivative_namer`, e.g.
 
     <root>/sub-01/cov/sub-01_task-rest_cov.fif
@@ -30,8 +47,8 @@ imported when a file is actually read or written.
 from pathlib import Path
 from typing import Any
 
-from ..datatype import Datatype
-from ..extension import register_extension
+from ..datatype import Datatype, RawDatatype
+from ..extension import register_extension, register_raw
 from ..naming import derivative_namer
 
 _FILE_ENTITIES = ("session", "task", "run", "desc")
@@ -46,6 +63,24 @@ def _mne():
             "Reading/writing MNE derivatives needs mne: pip install 'mindmap-fascicle[mne]'"
         ) from err
     return mne
+
+
+# Recording files only: companions (.eeg/.vmrk, .fdt, .json) mustn't match.
+# CTF .ds is a folder. BTi/4D (no extension) isn't read by mne.io.read_raw.
+MEG_EXTENSIONS = (".fif", ".ds", ".con", ".sqd", ".bin")
+EEG_EXTENSIONS = (".vhdr", ".set", ".edf", ".bdf")
+
+
+def _read_raw(path):
+    return _mne().io.read_raw(path, preload=False, verbose="warning")
+
+
+def _read_info(path):
+    """Read only the measurement info: directly for FIF, else from the raw header."""
+    mne = _mne()
+    if Path(path).suffix == ".fif":
+        return mne.io.read_info(path, verbose="warning")
+    return mne.io.read_raw(path, preload=False, verbose="warning").info
 
 
 def _read_src(path):
@@ -115,6 +150,13 @@ DATATYPES: dict[str, Datatype] = {
 }
 
 
+RAW: dict[str, RawDatatype] = {
+    "meg": RawDatatype("meg", _read_raw, MEG_EXTENSIONS),
+    "eeg": RawDatatype("eeg", _read_raw, EEG_EXTENSIONS),
+    "meg-info": RawDatatype("meg", _read_info, MEG_EXTENSIONS),
+}
+
+
 def register(
     dm,
     root_key: str = "mne",
@@ -122,8 +164,9 @@ def register(
     namespace: str | None = None,
     readers: dict[str, Any] | None = None,
     writers: dict[str, Any] | None = None,
+    raw: bool = True,
 ) -> None:
-    """Register MNE source-analysis datatypes on `dm`.
+    """Register raw MEG/EEG and MNE source-analysis datatypes on `dm`.
 
     Parameters
     ----------
@@ -136,13 +179,20 @@ def register(
     namespace: str, optional
         Key prefix; defaults to `root_key`.
     readers, writers: dict, optional
-        Bare datatype name -> replacement function.
+        Bare derivative name -> replacement function. To swap a raw
+        reader, use `dm.set_reader("meg", ...)` after registering.
+    raw: bool
+        Also register the raw `meg`, `eeg` and `meg-info` keys.
 
     Raises
     ------
     KeyError
         If `root_path` is omitted and `root_key` isn't already registered.
+    ValueError
+        If a raw key is already registered with something else.
     """
+    if raw:
+        register_raw(dm, RAW)
     register_extension(
         dm,
         DATATYPES,

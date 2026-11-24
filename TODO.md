@@ -17,7 +17,11 @@ sub-01/ses-meg/meg/sub-01_ses-meg_headshape.pos
 sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
 ```
 
-- [ ] **Raw MEG/EEG datatypes with an MNE reader.** Only `T1w` is built in, and the MNE
+- [x] **Raw MEG/EEG datatypes with an MNE reader.** Done: `mne.register` adds raw `meg`, `eeg`
+  and `meg-info` (unprefixed, read-only), found through the BIDS index by the new core
+  `dm.add_raw` / `register_raw`. `meg-info` uses `mne.io.read_info` for `.fif`, the raw header
+  otherwise. Not covered: BTi/4D (no extension, not read by `mne.io.read_raw`).
+  Original request: Only `T1w` is built in, and the MNE
   extension (`extensions/mne.py`) covers derivatives only (`src`, `fwd`, `ave`, `cov`,
   `stc`). `dm.add_datatype("meg", "raw", dm.bids_namer("meg"))` builds the right path, but
   `dm.load(...)` fails: `No reader registered for extension '.fif'`.
@@ -38,7 +42,8 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
     Registering the suffix as a datatype is probably enough, but check.
   - `_coordsystem.json`: already loads as a dict through the default `.json` reader.
     Registering the suffix (`coordsystem`) would make it discoverable through `describe`.
-- [ ] **BIDS inheritance: files above the datatype folder aren't found.**
+- [ ] **BIDS inheritance: files above the datatype folder aren't found.** Next step: build on
+  `add_raw` (index lookup) plus `layout.get_nearest` for sidecars.
   - `channels.tsv` and `meg.json` sit at the session level (`ses-meg/`), which the BIDS
     inheritance principle allows. `bids_namer("channels")` builds
     `ses-meg/meg/..._channels.tsv`, which doesn't exist, so the load raises
@@ -48,7 +53,9 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   - Suggested: for raw reads, fall back to the layout (`layout.get(...)` /
     `layout.get_nearest(...)`) when the built path doesn't exist, or resolve sidecars
     with pybids' inheritance (`get_metadata`-style lookup).
-- [ ] **The `run` entity isn't zero-padded to match the dataset.**
+- [ ] **The `run` entity isn't zero-padded to match the dataset.** Fixed for keys registered
+  with `add_raw` (`meg`, `eeg`, `meg-info`): the index stores runs as integers. Still open for
+  `bids_namer` keys such as `T1w`.
   - `get_path(..., run=1)` builds `..._run-1_meg.fif`, but ds000117 names it `run-01`.
     The path is wrong, and the error only says "No file for 'meg'".
   - `run="01"` works, so it's a usability issue, not wrong data: BIDS allows both forms,

@@ -553,3 +553,115 @@ def test_raw_namer_still_accepts_raw_entities_and_sidecar(bids_root):
     path = dm.get_path("01", "T1w", session="a", acquisition="mprage", run=2, extension=".json")
 
     assert path.name == "sub-01_ses-a_acq-mprage_run-2_T1w.json"
+
+
+# --- raw modalities found through the BIDS index (add_raw) -----------------
+
+
+def test_add_raw_finds_modality_bids_does_not_define(raw_root):
+    dm = DatasetManager(raw_root)
+    key = dm.add_raw("bar", "bar", reader=lambda p: p.name)
+
+    assert key == "bar"
+    assert dm.load("01", "bar", acquisition="y") == "sub-01_task-x_acq-y_bar.xyz"
+
+
+def test_add_raw_key_needs_not_be_the_suffix(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar-name", "bar", reader=lambda p: p.name)
+
+    assert dm.load("01", "bar-name") == "sub-01_task-x_acq-y_bar.xyz"
+
+
+@pytest.mark.parametrize("run", [1, "01"])
+def test_add_raw_matches_run_whatever_the_padding(raw_root, run):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif", ".ds"))
+
+    path = dm.get_path("01", "meg", session="a", task="x", run=run)
+
+    assert path.name == "sub-01_ses-a_task-x_run-01_meg.fif"
+
+
+def test_add_raw_returns_directory_recording(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif", ".ds"))
+
+    path = dm.get_path("01", "meg", session="a", task="y")
+
+    assert path.is_dir()
+    assert path.name == "sub-01_ses-a_task-y_meg.ds"
+
+
+def test_add_raw_ignores_directory_with_other_extension(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+
+    with pytest.raises(FileNotFoundError):
+        dm.get_path("01", "meg", session="a", task="y")
+
+
+def test_add_raw_extensions_skip_companion_files(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("eeg", "eeg", extensions=(".vhdr", ".edf"))
+
+    assert dm.get_path("01", "eeg", task="x").name == "sub-01_task-x_eeg.vhdr"
+
+
+def test_add_raw_extension_argument_takes_precedence(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("eeg", "eeg", extensions=(".vhdr",))
+
+    assert dm.get_path("01", "eeg", task="x", extension=".json").suffix == ".json"
+
+
+def test_add_raw_several_matches_raise_and_list_candidates(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("eeg", "eeg")  # any extension: .vhdr, .eeg, .vmrk and .json all match
+
+    with pytest.raises(ValueError, match=r"Several raw files.*\.vmrk"):
+        dm.get_path("01", "eeg", task="x")
+
+
+def test_add_raw_missing_file_raises_file_not_found(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+
+    with pytest.raises(FileNotFoundError, match="task"):
+        dm.load("01", "meg", session="a", task="none")
+
+
+def test_add_raw_unknown_entity_raises(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar", "bar")
+
+    with pytest.raises(ValueError, match="bogus"):
+        dm.get_path("01", "bar", bogus="x")
+
+
+def test_add_raw_filters_apply_to_every_lookup(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar", "bar", filters={"acquisition": "z"})
+
+    with pytest.raises(FileNotFoundError, match="'acquisition': 'z'"):
+        dm.get_path("01", "bar")
+
+
+def test_add_raw_is_read_only(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar", "bar")
+
+    with pytest.raises(TypeError, match="read-only"):
+        dm.save(object(), "01", "bar", overwrite=True)
+
+
+def test_add_raw_describe(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar", "bar")
+
+    info = dm.describe("bar")
+
+    assert info["root_key"] == "raw"
+    assert info["root"] == raw_root
+    assert info["namer"] == "raw_lookup('bar')"
+    assert info["writer"] == "READ_ONLY"

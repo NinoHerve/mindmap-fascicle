@@ -67,3 +67,35 @@ class Datatype:
     def READ_ONLY(data: Any, path: Path) -> None:
         """Writer marking a datatype as read-only; `DatasetManager.save` refuses it."""
         raise TypeError(f"Datatype at {path} is read-only.")
+
+
+@dataclass(frozen=True)
+class RawDatatype:
+    """A raw modality found through the dataset's BIDS index.
+
+    Declares what `DatasetManager.add_raw` registers: a pybids query
+    (`suffix`, `extensions`, `filters`) and a reader. Extensions list
+    these in a `RAW` table and hand it to `fascicle.register_raw`.
+
+    The registry key is chosen separately, so one suffix can back several
+    keys with different readers (e.g. MNE's `meg` and `meg-info`).
+
+    Attributes
+    ----------
+    suffix: str
+        BIDS suffix to look up, e.g. "meg". Any suffix pybids indexes
+        works, including ones the BIDS spec doesn't define.
+    reader: Callable, optional
+        `reader(path) -> data`. None dispatches on the file extension.
+    extensions: tuple[str, ...], optional
+        Extensions that hold the recording, e.g. (".vhdr", ".edf"), so
+        companion files (".eeg", ".vmrk", ".json") don't match. None
+        accepts any extension.
+    filters: dict, optional
+        Extra pybids filters always applied, e.g. `{"datatype": "eeg"}`.
+    """
+
+    suffix: str
+    reader: Callable[[Path], Any] | None = None
+    extensions: tuple[str, ...] | None = None
+    filters: dict[str, Any] | None = None

@@ -23,7 +23,7 @@ from bids import BIDSLayout
 
 from . import formats
 from .config import read_config
-from .datatype import Datatype
+from .datatype import Datatype, RawDatatype
 from .utils import build_bids_path, parse_extension
 
 
@@ -35,8 +35,9 @@ class DatasetManager:
     via `get_path`/`load` in the parent process first.
 
     `save` does not re-index the BIDS layout: files written into the raw
-    dataset are loadable by path, but `self.subjects` and `self.layout`
-    queries won't see them until a new manager is created.
+    dataset are loadable by path, but `self.subjects`, `self.layout`
+    queries and raw modalities registered with `add_raw` won't see them
+    until a new manager is created.
     """
 
     def __init__(
@@ -207,12 +208,108 @@ class DatasetManager:
         namer.__name__ = f"bids_namer({suffix!r})"
         return namer
 
+    def add_raw(
+        self,
+        key: str,
+        suffix: str,
+        reader: Callable[[Any], Any] | None = None,
+        *,
+        extensions: tuple[str, ...] | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> str:
+        """Register a read-only raw modality, found through the BIDS index.
+
+        Unlike `bids_namer`, which builds a path from pybids' raw patterns,
+        this looks the file up in `self.layout`. It works for any suffix
+        pybids indexes, including ones the BIDS spec doesn't define, as long
+        as the name is BIDS-shaped (`sub-01[_ses-a]_task-x_<suffix>.<ext>`).
+        The lookup also finds files whatever their extension, matches
+        `run=1` to `run-01`, and returns directory recordings (CTF `.ds`),
+        whose contents pybids indexes instead of the folder itself.
+
+        e.g. `dm.add_raw("meg-info", "meg", mne.io.read_info, extensions=(".fif",))`,
+        then `dm.load("01", "meg-info", session="meg", task="rest", run=1)`.
+
+        Because the path comes from the index, `get_path` raises for a file
+        that doesn't exist, and files added after the manager was built
+        aren't found. For names that aren't BIDS-shaped, register a custom
+        namer with `add_datatype(key, "raw", namer)` instead.
+
+        Parameters
+        ----------
+        key: str
+            Registry key. Needn't be the suffix (`"meg-info"` for suffix `"meg"`).
+        suffix: str
+            BIDS suffix to look up.
+        reader: Callable, optional
+            `reader(path) -> data`. None dispatches on file extension.
+        extensions: tuple[str, ...], optional
+            Extensions holding the recording (e.g. `(".vhdr", ".edf")`), so
+            companion files don't match. None accepts any extension. An
+            `extension=` passed to `load`/`get_path` takes precedence.
+        filters: dict, optional
+            Extra pybids filters applied to every lookup.
+
+        Returns the registry key used.
+        """
+        entry = RawDatatype(suffix, reader, tuple(extensions) if extensions else None,
+                            dict(filters) if filters else None)
+        dt = Datatype(self._raw_lookup(entry), reader, Datatype.READ_ONLY,
+                      ("any BIDS entity",), None, "raw")
+        return self.add(key, dt)
+
+    def _raw_lookup(self, entry: RawDatatype) -> Callable[..., Path]:
+        """Return a namer finding `entry`'s file in the BIDS index."""
+
+        def namer(root: Any, subject: str, **entities) -> Path:
+            extensions = entities.pop("extension", None) or entry.extensions
+            if isinstance(extensions, str):
+                extensions = (extensions,)
+            query = {
+                "subject": str(subject).replace("sub-", ""),
+                **(entry.filters or {}),
+                **entities,
+            }
+            described = {"suffix": entry.suffix, **query, "extension": extensions}
+            # pybids rejects extension=None, so only filter when there is one.
+            by_extension = {"extension": list(extensions)} if extensions else {}
+
+            try:
+                files = self.layout.get(
+                    suffix=entry.suffix, return_type="file", **by_extension, **query
+                )
+                inside = self.layout.get(return_type="file", **query)
+            except ValueError as err:
+                raise ValueError(f"Invalid lookup for raw '{entry.suffix}': {err}") from err
+
+            found = {Path(f) for f in files}
+            found |= _recording_dirs(inside, entry.suffix, extensions, self.roots["raw"])
+
+            if not found:
+                raise FileNotFoundError(f"No raw file in the BIDS index for {described}.")
+            if len(found) > 1:
+                names = sorted(str(p) for p in found)
+                raise ValueError(
+                    f"Several raw files match {described}: {names}. Pass extension= "
+                    "or more entities to pick one."
+                )
+            return found.pop()
+
+        namer.__name__ = f"raw_lookup({entry.suffix!r})"
+        namer.raw = entry
+        return namer
+
     # -------------------------
     # Access
     # -------------------------
 
     def get_path(self, subject: str, key: str, **inputs) -> Path:
-        """Build the path of datatype `key` for `subject`. Doesn't check it exists."""
+        """Build the path of datatype `key` for `subject`.
+
+        Doesn't check that the file exists, except for raw modalities
+        registered with `add_raw`: those are looked up in the BIDS index,
+        so a missing file raises `FileNotFoundError`.
+        """
         dt = self._entry(key)
         root = self.roots[dt.root_key] if dt.root_key is not None else None
         return Path(dt.namer(root, subject, **inputs))
@@ -344,3 +441,27 @@ class DatasetManager:
     @staticmethod
     def _exists(dt: Datatype, path: Path) -> bool:
         return dt.exists(path) if dt.exists is not None else path.exists()
+
+
+def _recording_dirs(
+    files: list[str], suffix: str, extensions: tuple[str, ...] | None, root: str | Path
+) -> set[Path]:
+    """Return the folders above `files` named like a `<suffix>` recording.
+
+    Some formats store a recording as a folder (CTF's `sub-01_task-x_meg.ds/`).
+    pybids indexes the files inside it, with the folder's entities, so the
+    folder is found from them: any parent named `*_<suffix><ext>`, with `ext`
+    in `extensions` (any extension if None).
+    """
+    root = Path(root).resolve()
+    found = set()
+    for file in files:
+        for parent in Path(file).resolve().parents:
+            if parent == root or root not in parent.parents:
+                break
+            stem, dot, ext = parent.name.rpartition(".")
+            if not dot or not stem.endswith(f"_{suffix}"):
+                continue
+            if extensions is None or f".{ext}" in extensions:
+                found.add(parent)
+    return found

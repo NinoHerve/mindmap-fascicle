@@ -89,3 +89,31 @@ def charm_root(tmp_path):
     nib.save(t1, m2m / "T1.nii.gz")
 
     return root
+
+
+@pytest.fixture
+def raw_root(bids_root):
+    """`bids_root` plus raw MEG/EEG and a made-up modality (empty placeholder files).
+
+    sub-01/ses-a/meg/sub-01_ses-a_task-x_run-01_meg.fif   one FIF run, zero-padded
+    sub-01/ses-a/meg/sub-01_ses-a_task-y_meg.ds/           a CTF folder recording
+    sub-01/eeg/sub-01_task-x_eeg.vhdr/.eeg/.vmrk/.json     BrainVision + companions
+    sub-01/foo/sub-01_task-x_acq-y_bar.xyz                 a modality BIDS doesn't define
+    """
+    sub = bids_root / "sub-01"
+    meg = sub / "ses-a" / "meg"
+    meg.mkdir(parents=True)
+    (meg / "sub-01_ses-a_task-x_run-01_meg.fif").touch()
+    ds = meg / "sub-01_ses-a_task-y_meg.ds"
+    ds.mkdir()
+    (ds / "sub-01_ses-a_task-y_meg.meg4").touch()
+
+    eeg = sub / "eeg"
+    eeg.mkdir()
+    for ext in (".vhdr", ".eeg", ".vmrk"):
+        (eeg / f"sub-01_task-x_eeg{ext}").touch()
+    (eeg / "sub-01_task-x_eeg.json").write_text("{}")  # pybids parses sidecars
+
+    (sub / "foo").mkdir()
+    (sub / "foo" / "sub-01_task-x_acq-y_bar.xyz").touch()
+    return bids_root

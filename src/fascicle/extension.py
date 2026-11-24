@@ -14,13 +14,25 @@ a `register` function that hands the table to `register_extension`:
                            namespace=namespace, readers=readers, writers=writers)
 
 The built-in extensions in `fascicle.extensions` are written exactly this way.
+
+A toolbox can also bring raw modalities the core doesn't read, such as
+MEG/EEG for MNE. Those live in the raw BIDS dataset, not in the
+extension's folder, so they go in a separate `RAW` table of
+`RawDatatype`s, registered unprefixed with `register_raw`:
+
+    RAW = {"meg": RawDatatype("meg", read_meg, extensions=(".fif", ".ds"))}
+
+    def register(dm, ..., raw=True):
+        if raw:
+            register_raw(dm, RAW)
+        register_extension(dm, DATATYPES, ...)
 """
 
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from .datatype import Datatype
+from .datatype import Datatype, RawDatatype
 
 
 def register_extension(
@@ -86,3 +98,38 @@ def register_extension(
         if name in writers:
             changes["writer"] = writers[name]
         dm.add(name, replace(dt, **changes), namespace=namespace)
+
+
+def register_raw(dm, raw: dict[str, RawDatatype], *, overwrite: bool = False) -> None:
+    """Register a table of raw modalities on `dm` with `DatasetManager.add_raw`.
+
+    Keys are registered as given, without a namespace: raw modalities
+    belong to the BIDS dataset, not to one extension's folder. Registering
+    the same entry again (e.g. from a second `register` call of the same
+    extension) does nothing.
+
+    Parameters
+    ----------
+    dm: fascicle.DatasetManager
+    raw: dict[str, RawDatatype]
+        Registry key -> raw modality.
+    overwrite: bool
+        Replace keys already registered with something else.
+
+    Raises
+    ------
+    ValueError
+        If a key is already registered with a different datatype and
+        `overwrite` is False.
+    """
+    for key, entry in raw.items():
+        existing = dm.registry.get(key)
+        if existing is not None and not overwrite:
+            if getattr(existing.namer, "raw", None) == entry:
+                continue
+            raise ValueError(
+                f"Datatype '{key}' is already registered ({dm.describe(key)['namer']}). "
+                "Pass overwrite=True to replace it."
+            )
+        dm.add_raw(key, entry.suffix, entry.reader, extensions=entry.extensions,
+                   filters=entry.filters)
