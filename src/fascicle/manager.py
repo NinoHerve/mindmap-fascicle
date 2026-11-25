@@ -25,7 +25,16 @@ from . import formats
 from .config import read_config
 from .datatype import Datatype, RawDatatype
 from .naming import subject_label
-from .utils import build_bids_path, find_padded, find_sidecar, parse_extension
+from .utils import (
+    INHERITABLE_EXTENSIONS,
+    _INDEX_KEYS,
+    _as_index,
+    _filename_entities,
+    build_bids_path,
+    find_padded,
+    find_sidecar,
+    parse_extension,
+)
 
 
 class DatasetManager:
@@ -206,6 +215,11 @@ class DatasetManager:
         builds `run-1`. When that file doesn't exist, `get_path` (and so
         `load` and `save`) uses the same file under another zero-padding
         (`run-01`, `run-001`) if there is one.
+
+        Metadata files (`.json`, `.tsv`, `.bval`, `.bvec`) follow BIDS
+        inheritance in `get_path` and `load`: when the built file doesn't
+        exist, the one that applies from a higher level is used (e.g. a
+        dataset-level `T1w.json`). `save` always writes the built path.
         """
 
         def namer(root: Any, subject: str, **entities) -> Path:
@@ -213,6 +227,7 @@ class DatasetManager:
 
         namer.__name__ = f"bids_namer({suffix!r})"
         namer.padding_lookup = True
+        namer.inheritance_lookup = True
         return namer
 
     def add_raw(
@@ -232,7 +247,8 @@ class DatasetManager:
         pybids indexes, including ones the BIDS spec doesn't define, as long
         as the name is BIDS-shaped (`sub-01[_ses-a]_task-x_<suffix>.<ext>`).
         The lookup also finds files whatever their extension, matches
-        `run=1` to `run-01`, and returns directory recordings (CTF `.ds`),
+        index entities whatever their zero-padding (`run=1` or `split=1`
+        finds `run-01`/`split-01`; also `echo`, `flip`, `inv`, `chunk`), and returns directory recordings (CTF `.ds`),
         whose contents pybids indexes instead of the folder itself.
 
         e.g. `dm.add_raw("meg-info", "meg", mne.io.read_info, extensions=(".fif",))`,
@@ -283,6 +299,12 @@ class DatasetManager:
         """
         entities = dict(entities)
         extensions = entities.pop("extension", None) or entry.extensions
+        # pybids compares only `run` as a number and doesn't parse `split`:
+        # the other index entities are matched on the file names instead.
+        by_number = {
+            key: _as_index(entities.pop(key))
+            for key in list(entities) if key in _INDEX_KEYS and key != "run"
+        }
         if isinstance(extensions, str):
             extensions = (extensions,)
         query = {
@@ -309,8 +331,14 @@ class DatasetManager:
             if not any(folder in Path(f).resolve().parents for folder in folders)
         }
         found |= folders
+        if by_number:
+            found = {
+                path for path in found
+                if all(_filename_entities(path.name)[0].get(key) == value
+                       for key, value in by_number.items())
+            }
         if not found:
-            described = {"suffix": entry.suffix, **query, "extension": extensions}
+            described = {"suffix": entry.suffix, **query, **by_number, "extension": extensions}
             raise FileNotFoundError(f"No raw file in the BIDS index for {described}.")
         return found
 
@@ -372,8 +400,20 @@ class DatasetManager:
         - for `bids_namer` keys (`T1w`, ...), if the built path doesn't
           exist but the same file does under another zero-padding
           (`run-01` for `run=1`), that file is returned. Several such files
-          raise `ValueError`.
+          raise `ValueError`;
+        - for `bids_namer` keys, a metadata file (`.json`, `.tsv`, `.bval`,
+          `.bvec`) that doesn't exist, even under another padding, is looked
+          up by BIDS inheritance (`fascicle.utils.find_sidecar`): e.g.
+          `sub-01/sub-01_T1w.json` or a dataset-level `T1w.json`. Two equally
+          specific candidates raise `ValueError`.
+
+        `save` uses the same path, except that it never follows inheritance:
+        it writes the subject's own file, not a shared one higher up.
         """
+        return self._path(subject, key, inputs, inherit=True)
+
+    def _path(self, subject: str, key: str, inputs: dict, *, inherit: bool) -> Path:
+        """`get_path`, following BIDS inheritance only if `inherit`."""
         dt = self._entry(key)
         root = self.roots[dt.root_key] if dt.root_key is not None else None
         path = Path(dt.namer(root, subject_label(subject), **inputs))
@@ -389,7 +429,22 @@ class DatasetManager:
                 )
             if padded:
                 return padded[0]
+
+        if inherit and self._inherits(dt, path) and not path.exists():
+            _, suffix, extension = _filename_entities(path.name)
+            try:
+                return find_sidecar(path, suffix, extension)
+            except FileNotFoundError:
+                pass
         return path
+
+    @staticmethod
+    def _inherits(dt: Datatype, path: Path) -> bool:
+        """Whether `path` of `dt` is a metadata file looked up by BIDS inheritance."""
+        return (
+            getattr(dt.namer, "inheritance_lookup", False)
+            and parse_extension(path) in INHERITABLE_EXTENSIONS
+        )
 
     def load(self, subject: str, key: str, **inputs) -> Any:
         """Build the path of datatype `key` for `subject` and read it."""
@@ -405,6 +460,8 @@ class DatasetManager:
                 " (nor with the same entities under another zero-padding)"
                 if getattr(dt.namer, "padding_lookup", False) else ""
             )
+            if self._inherits(dt, path):
+                padding += " (nor at a higher level, by BIDS inheritance)"
             raise FileNotFoundError(f"No file for '{key}' (sub-{subject}) at: {path}{padding}")
 
         reader = dt.reader or self.load_by_extension
@@ -421,7 +478,7 @@ class DatasetManager:
             If the file exists and `overwrite` is False.
         """
         dt = self._entry(key)
-        path = self.get_path(subject, key, **inputs)
+        path = self._path(subject, key, inputs, inherit=False)
 
         writer = dt.writer
         if writer is Datatype.READ_ONLY:

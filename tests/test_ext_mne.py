@@ -488,3 +488,100 @@ def test_read_pos_skips_non_numeric_lines(tmp_path):
     points = mne_ext._read_pos(path)
 
     assert list(points["label"]) == ["HP2"]
+
+
+# --- subjects-dir keys: trans, head, head-dense --------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("trans", "sub-01/sub-01-trans.fif"),
+        ("head", "sub-01/bem/sub-01-head.fif"),
+        ("head-dense", "sub-01/bem/sub-01-head-dense.fif"),
+    ],
+)
+@pytest.mark.parametrize("subject", ["01", "sub-01"])
+def test_subjects_dir_paths(tmp_path, name, expected, subject):
+    namer = mne_ext.SUBJECTS_DIR_DATATYPES[name].namer
+
+    assert namer(tmp_path, subject) == tmp_path / expected
+
+
+@pytest.fixture
+def subjects_dm(bids_root, tmp_path):
+    """FreeSurfer keys and the MNE subjects-dir keys on one (not yet existing) root."""
+    from fascicle.extensions import freesurfer
+
+    manager = DatasetManager(bids_root)
+    freesurfer.register(manager, root_path=tmp_path / "subjects")
+    mne_ext.register_subjects_dir(manager)
+    return manager
+
+
+def test_subjects_dir_keys_share_the_freesurfer_root(subjects_dm, tmp_path):
+    assert {"fs-trans", "fs-head", "fs-head-dense", "fs-t1", "fs-iskull"} <= set(subjects_dm.registry)
+    for key in ("fs-trans", "fs-head", "fs-head-dense"):
+        assert subjects_dm.describe(key)["root"] == tmp_path / "subjects"
+
+
+def test_subjects_dir_paths_need_no_folder(subjects_dm, tmp_path):
+    assert not (tmp_path / "subjects").exists()
+    assert subjects_dm.get_path("sub-01", "fs-trans") == tmp_path / "subjects/sub-01/sub-01-trans.fif"
+
+
+def test_subjects_dir_own_root(bids_root, tmp_path):
+    manager = DatasetManager(bids_root)
+    mne_ext.register_subjects_dir(manager, root_key="coreg", root_path=tmp_path / "coreg")
+
+    assert {"coreg-trans", "coreg-head", "coreg-head-dense"} <= set(manager.registry)
+    assert manager.describe("coreg-trans")["root"] == tmp_path / "coreg"
+
+
+def test_subjects_dir_missing_root_raises(bids_root):
+    with pytest.raises(KeyError, match="missing"):
+        mne_ext.register_subjects_dir(DatasetManager(bids_root), root_key="missing")
+
+
+def test_head_keys_are_read_only_and_trans_is_not(subjects_dm):
+    assert subjects_dm.describe("fs-head")["writer"] == "READ_ONLY"
+    assert subjects_dm.describe("fs-head-dense")["writer"] == "READ_ONLY"
+    assert subjects_dm.describe("fs-trans")["writer"] != "READ_ONLY"
+
+
+def test_trans_round_trip(subjects_dm, mne, tmp_path):
+    matrix = np.eye(4)
+    matrix[:3, 3] = [0.01, -0.02, 0.03]
+    trans = mne.transforms.Transform("head", "mri", matrix)
+
+    path = subjects_dm.save(trans, "01", "fs-trans")
+    loaded = subjects_dm.load("sub-01", "fs-trans")
+
+    assert path == tmp_path / "subjects/sub-01/sub-01-trans.fif"
+    assert (loaded["from"], loaded["to"]) == (trans["from"], trans["to"])
+    np.testing.assert_array_almost_equal(loaded["trans"], matrix)
+
+    with pytest.raises(FileExistsError):
+        subjects_dm.save(trans, "01", "fs-trans")
+    matrix[:3, 3] = 0
+    subjects_dm.save(mne.transforms.Transform("head", "mri", matrix), "01", "fs-trans", overwrite=True)
+    np.testing.assert_array_almost_equal(subjects_dm.load("01", "fs-trans")["trans"], np.eye(4))
+
+
+def test_head_dense_reads_bem_surfaces_and_refuses_save(subjects_dm, mne):
+    from mne.io.constants import FIFF
+
+    rr = np.array([[0, 0, 0], [0.1, 0, 0], [0, 0.1, 0], [0, 0, 0.1]], dtype=float)
+    tris = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+    surf = dict(id=FIFF.FIFFV_BEM_SURF_ID_HEAD, sigma=0.33, np=len(rr), ntri=len(tris),
+                coord_frame=FIFF.FIFFV_COORD_MRI, rr=rr, tris=tris)
+    path = subjects_dm.get_path("01", "fs-head-dense")
+    path.parent.mkdir(parents=True)
+    mne.write_bem_surfaces(path, [surf], verbose="warning")
+
+    loaded = subjects_dm.load("01", "fs-head-dense")
+
+    assert isinstance(loaded, list) and len(loaded) == 1
+    np.testing.assert_array_almost_equal(loaded[0]["rr"], rr)
+    with pytest.raises(TypeError, match="read-only"):
+        subjects_dm.save(loaded, "01", "fs-head-dense", overwrite=True)

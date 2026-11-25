@@ -51,8 +51,11 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   - `_coordsystem.json`: already loads as a dict through the default `.json` reader.
     Registering the suffix (`coordsystem`) would make it discoverable through `describe`.
 - [x] **BIDS inheritance: files above the datatype folder aren't found.** Done for raw keys:
-  `fascicle.utils.find_sidecar` and `add_raw(..., sidecar_of=...)`. Still open for
-  `bids_namer` keys such as `T1w` sidecars.
+  `fascicle.utils.find_sidecar` and `add_raw(..., sidecar_of=...)`. Done for `bids_namer` keys
+  too: `get_path`/`load` fall back to the inherited file for metadata extensions (`.json`, `.tsv`,
+  `.bval`, `.bvec`), after the padding lookup; `save` never does. `find_sidecar` now also skips
+  missing folders and matches bare dataset-level names (`T1w.json`). Checked on ds000117:
+  `bids_namer("channels")` finds the session-level `channels.tsv`.
   - `channels.tsv` and `meg.json` sit at the session level (`ses-meg/`), which the BIDS
     inheritance principle allows. `bids_namer("channels")` builds
     `ses-meg/meg/..._channels.tsv`, which doesn't exist, so the load raises
@@ -65,9 +68,10 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
 - [x] **The `run` entity isn't zero-padded to match the dataset.** Done: `bids_namer` keys
   (`T1w`, ...) find the same file under any zero-padding of any index entity
   (`fascicle.utils.find_padded`), `save` writes values as given and won't duplicate a file
-  under another padding. `add_raw` keys match `run` through pybids. Still open: pybids
-  compares only `run` as a number (`echo`/`flip`/`inv`/`chunk` are strings, `split` isn't
-  parsed), so `add_raw` lookups with e.g. MEG `split-01` would need the same treatment.
+  under another padding. `add_raw` keys match `run` through pybids, and `echo`,
+  `flip`, `inv`, `chunk` and `split` on the file names (pybids compares them as strings and
+  doesn't parse `split`): `split=1` finds MEG `split-01`. `find_sidecar` compares index entities
+  as numbers too.
   - `get_path(..., run=1)` builds `..._run-1_meg.fif`, but ds000117 names it `run-01`.
     The path is wrong, and the error only says "No file for 'meg'".
   - `run="01"` works, so it's a usability issue, not wrong data: BIDS allows both forms,
@@ -108,12 +112,21 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   `label("sub-01")` workarounds. Its `head` (`sub-XX-head.fif`) and `t1` keys aren't in
   fascicle. Done in the manuscript with 0.3.0: `watershed-head` and `fs-done`
   (`scripts/recon-all.done`) stay local `add_datatype` keys.
-- [ ] **MNE `trans` and BEM head keys in the MNE extension.** The manuscript's coregistration
+- [x] **MNE `trans` and BEM head keys in the MNE extension.** Done:
+  `mne.register_subjects_dir(dm, root_key=...)` adds `<root>-trans` (`sub-XX/sub-XX-trans.fif`,
+  read/write), `<root>-head` (`bem/sub-XX-head.fif`) and `<root>-head-dense`
+  (`bem/sub-XX-head-dense.fif`), read-only, as `mne.read_bem_surfaces` lists. Default root `fs`.
+  Checked on the manuscript's sub-01: same paths as its local keys, all load.
+  Original request: The manuscript's coregistration
   writes `sub-XX/sub-XX-trans.fif` (in an MNE subjects dir) with a local `add_datatype` key
   (`coreg-trans`, read/written with `mne.read_trans` / `mne.write_trans(..., overwrite=True)`),
   and reads `bem/sub-XX-head-dense.fif` / `bem/sub-XX-head.fif` (`mne.read_bem_surfaces`) with
   local keys too (`coreg-head`, `watershed-head`). Suggested: `trans` (read/write) and `head`,
   `head-dense` (read-only) in `fascicle.extensions.mne`, on a subjects-dir root.
+- [ ] **Manuscript (after the next release):** replace the local `coreg-trans`, `coreg-head` and
+  `watershed-head` keys with `fmne.register_subjects_dir(dm, root_key="coreg")` /
+  `(root_key="watershed")`. `coreg-head` becomes `coreg-head-dense`; `FILES["ws_done"]` keeps
+  `watershed-head`.
 
 ## Notes
 

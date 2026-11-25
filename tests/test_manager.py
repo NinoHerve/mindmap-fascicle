@@ -583,6 +583,80 @@ def test_add_raw_matches_run_whatever_the_padding(raw_root, run):
     assert path.name == "sub-01_ses-a_task-x_run-01_meg.fif"
 
 
+@pytest.fixture
+def split_root(bids_root):
+    """An Elekta recording split in two (`split-01`, `split-02`), plus other index entities."""
+    meg = bids_root / "sub-01" / "meg"
+    meg.mkdir()
+    for split in ("01", "02"):
+        (meg / f"sub-01_task-x_split-{split}_meg.fif").touch()
+    (meg / "sub-01_task-x_channels.tsv").write_text("name\ttype\nMEG0111\tMEGMAG\n")
+    anat = bids_root / "sub-01" / "anat"
+    for name in ("sub-01_echo-01_MESE.nii.gz", "sub-01_echo-02_MESE.nii.gz",
+                 "sub-01_inv-002_MP2RAGE.nii.gz", "sub-01_flip-1_VFA.nii.gz"):
+        (anat / name).touch()
+    return bids_root
+
+
+@pytest.mark.parametrize("split", [1, "1", "01", "001"])
+def test_add_raw_matches_split_whatever_the_padding(split_root, split):
+    dm = DatasetManager(split_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+
+    assert dm.get_path("01", "meg", task="x", split=split).name == "sub-01_task-x_split-01_meg.fif"
+
+
+@pytest.mark.parametrize(
+    "suffix, entities, name",
+    [
+        ("MESE", {"echo": 2}, "sub-01_echo-02_MESE.nii.gz"),
+        ("MP2RAGE", {"inv": "02"}, "sub-01_inv-002_MP2RAGE.nii.gz"),
+        ("VFA", {"flip": "01"}, "sub-01_flip-1_VFA.nii.gz"),
+    ],
+)
+def test_add_raw_matches_other_index_entities_whatever_the_padding(split_root, suffix, entities, name):
+    dm = DatasetManager(split_root)
+    dm.add_raw(suffix, suffix)
+
+    assert dm.get_path("01", suffix, **entities).name == name
+
+
+def test_add_raw_chunk_whatever_the_padding(split_root):
+    chunk = split_root / "sub-01" / "micr" / "sub-01_sample-A_chunk-01_photo.png"
+    chunk.parent.mkdir()
+    chunk.touch()
+    dm = DatasetManager(split_root)
+    dm.add_raw("photo", "photo")
+
+    assert dm.get_path("01", "photo", sample="A", chunk=1) == chunk
+
+
+def test_add_raw_missing_split_names_it(split_root):
+    dm = DatasetManager(split_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+
+    with pytest.raises(FileNotFoundError, match="'split': 3"):
+        dm.get_path("01", "meg", task="x", split=3)
+
+
+def test_add_raw_split_files_without_split_are_ambiguous(split_root):
+    dm = DatasetManager(split_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+
+    with pytest.raises(ValueError, match="split-02"):
+        dm.get_path("01", "meg", task="x")
+
+
+def test_sidecar_of_split_recording(split_root):
+    dm = DatasetManager(split_root)
+    dm.add_raw("meg-file", "meg", extensions=(".fif",))
+    dm.add_raw("meg-channels", "channels", extensions=(".tsv",), sidecar_of="meg-file")
+
+    path = dm.get_path("01", "meg-channels", task="x", split=1)
+
+    assert path.name == "sub-01_task-x_channels.tsv"
+
+
 def test_add_raw_returns_directory_recording(raw_root):
     dm = DatasetManager(raw_root)
     dm.add_raw("meg", "meg", extensions=(".fif", ".ds"))
@@ -883,6 +957,113 @@ def test_missing_file_message_mentions_padding(bids_root):
 
     with pytest.raises(FileNotFoundError, match="zero-padding"):
         dm.load("01", "T1w", run=9)
+
+
+# --- BIDS inheritance (bids_namer keys) ----------------------------------------
+
+
+def _json(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(content))
+    return path
+
+
+JSON = {"extension": ".json"}
+
+
+def test_dataset_level_sidecar_is_inherited(bids_root):
+    root_json = _json(bids_root / "T1w.json", {"level": "dataset"})
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", **JSON) == root_json
+    assert dm.load("01", "T1w", **JSON) == {"level": "dataset"}
+
+
+def test_nearest_level_wins(bids_root):
+    _json(bids_root / "T1w.json", {"level": "dataset"})
+    subject = _json(bids_root / "sub-01" / "sub-01_T1w.json", {"level": "subject"})
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", **JSON) == subject
+    own = _json(bids_root / "sub-01" / "anat" / "sub-01_T1w.json", {"level": "own"})
+    assert dm.get_path("01", "T1w", **JSON) == own
+
+
+def test_less_specific_sidecar_in_same_folder_applies(bids_root):
+    general = _json(bids_root / "sub-01" / "anat" / "sub-01_T1w.json", {})
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", acquisition="mprage", **JSON) == general
+
+
+def test_sidecar_of_other_entities_does_not_apply(bids_root):
+    _json(bids_root / "acq-other_T1w.json", {})
+    dm = DatasetManager(bids_root)
+
+    path = dm.get_path("01", "T1w", acquisition="mprage", **JSON)
+
+    assert path == bids_root / "sub-01" / "anat" / "sub-01_acq-mprage_T1w.json"
+    with pytest.raises(FileNotFoundError, match="inheritance"):
+        dm.load("01", "T1w", acquisition="mprage", **JSON)
+
+
+def test_data_files_do_not_inherit(bids_root):
+    dm = DatasetManager(bids_root)
+
+    path = dm.get_path("01", "T1w", acquisition="x")
+
+    assert path.name == "sub-01_acq-x_T1w.nii.gz"  # not the existing sub-01_T1w.nii.gz
+    with pytest.raises(FileNotFoundError) as err:
+        dm.load("01", "T1w", acquisition="x")
+    assert "inheritance" not in str(err.value)
+
+
+def test_save_writes_own_file_not_inherited_one(bids_root):
+    root_json = _json(bids_root / "T1w.json", {"level": "dataset"})
+    dm = DatasetManager(bids_root)
+
+    path = dm.save({"level": "own"}, "01", "T1w", **JSON)
+
+    assert path == bids_root / "sub-01" / "anat" / "sub-01_T1w.json"
+    assert json.loads(root_json.read_text()) == {"level": "dataset"}
+    assert dm.get_path("01", "T1w", **JSON) == path
+
+
+def test_session_level_channels_found_from_run(bids_root):
+    session = bids_root / "sub-01" / "ses-a"
+    (session / "meg").mkdir(parents=True)
+    (session / "meg" / "sub-01_ses-a_task-x_run-01_meg.fif").touch()
+    channels = session / "sub-01_ses-a_task-x_channels.tsv"
+    channels.write_text("name\ttype\nMEG0111\tMEGMAG\n")
+    dm = DatasetManager(bids_root)
+    dm.add_datatype("channels", "raw", dm.bids_namer("channels"))
+
+    assert dm.get_path("01", "channels", session="a", task="x", run=1) == channels
+    assert list(dm.load("01", "channels", session="a", task="x", run=1)["name"]) == ["MEG0111"]
+
+
+def test_padding_is_tried_before_inheritance(bids_root):
+    _json(bids_root / "T1w.json", {})
+    padded = _json(bids_root / "sub-01" / "anat" / "sub-01_run-01_T1w.json", {})
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", run=1, **JSON) == padded
+
+
+def test_inherited_run_matches_whatever_the_padding(bids_root):
+    root_run = _json(bids_root / "run-01_T1w.json", {})
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", run=1, **JSON) == root_run
+
+
+def test_equally_specific_inherited_sidecars_raise(bids_root):
+    _json(bids_root / "acq-mprage_T1w.json", {})
+    _json(bids_root / "run-1_T1w.json", {})
+    dm = DatasetManager(bids_root)
+
+    with pytest.raises(ValueError, match="equally"):
+        dm.get_path("01", "T1w", acquisition="mprage", run=1, **JSON)
 
 
 # --- subject given as "01" or "sub-01" -----------------------------------------

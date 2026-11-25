@@ -191,6 +191,42 @@ def test_find_sidecar_stops_at_dataset_root(dataset, tmp_path):
         find_sidecar(recording, "meg", ".json")
 
 
+def test_find_sidecar_matches_bare_dataset_level_name(dataset):
+    root, recording = dataset
+    sidecar = root / "meg.json"
+    sidecar.touch()
+
+    assert find_sidecar(recording, "meg", ".json") == sidecar
+
+
+def test_find_sidecar_for_path_whose_folder_does_not_exist(dataset):
+    root, _ = dataset
+    channels = root / "sub-01" / "ses-a" / "sub-01_ses-a_task-x_channels.tsv"
+    channels.touch()
+    missing = root / "sub-01" / "ses-a" / "eeg" / "sub-01_ses-a_task-x_channels.tsv"
+
+    assert find_sidecar(missing, "channels", ".tsv") == channels
+
+
+def test_find_sidecar_compares_index_entities_as_numbers(dataset):
+    root, recording = dataset  # ..._run-01_meg.fif
+    sidecar = root / "run-1_meg.json"
+    sidecar.touch()
+
+    assert find_sidecar(recording, "meg", ".json") == sidecar
+
+
+def test_find_sidecar_split_sidecar_applies_to_its_split_only(dataset):
+    _, recording = dataset
+    split = recording.with_name("sub-01_ses-a_task-x_split-01_meg.fif")
+    split.touch()
+    (recording.parent / "sub-01_ses-a_task-x_split-02_channels.tsv").touch()
+    own = recording.parent / "sub-01_ses-a_task-x_split-1_channels.tsv"
+    own.touch()
+
+    assert find_sidecar(split, "channels", ".tsv") == own
+
+
 def test_find_sidecar_for_directory_recording(dataset):
     _, recording = dataset
     ds = recording.parent / "sub-01_ses-a_task-y_meg.ds"

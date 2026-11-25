@@ -7,8 +7,6 @@ find_padded (the same file under another zero-padding).
 
 from pathlib import Path
 
-from bids.layout import parse_file_entities
-
 from .naming import BIDS_ENTITIES, subject_label  # noqa: F401 - re-exported
 
 
@@ -122,9 +120,9 @@ def build_bids_path(layout, subject: str, suffix: str, **kwargs) -> Path:
     return path
 
 
-# Entities describing the file itself rather than what it's about; ignored
-# when matching a sidecar to a recording.
-_NOT_MATCHED = ("datatype", "suffix", "extension")
+# Metadata files the BIDS inheritance principle applies to. Data files
+# (.nii.gz, .fif, ...) never inherit.
+INHERITABLE_EXTENSIONS = (".json", ".tsv", ".bval", ".bvec")
 
 
 def find_sidecar(
@@ -137,10 +135,14 @@ def find_sidecar(
     outermost `sub-*` folder. Outside any BIDS layout (no `sub-*` parent),
     only the recording's own folder is searched. At each level, a candidate
     is a `*_<suffix><ext>` file whose entities are all also entities of the
-    recording, with the same values. The nearest level wins; within a level,
+    recording, with the same values (index entities such as `run` or
+    `split` compared as numbers, so `run-1` matches `run-01`). The nearest level wins; within a level,
     the candidate with the most entities wins. e.g. for
     `sub-01/ses-meg/meg/sub-01_ses-meg_task-face_run-01_meg.fif`,
-    `sub-01/ses-meg/sub-01_ses-meg_task-face_channels.tsv` applies.
+    `sub-01/ses-meg/sub-01_ses-meg_task-face_channels.tsv` applies. A bare
+    `<suffix><ext>` (e.g. `T1w.json`) has no entities, so it applies to every
+    recording. `recording` needn't exist, nor its folder: missing folders are
+    skipped.
 
     Raises
     ------
@@ -154,16 +156,20 @@ def find_sidecar(
     recording = Path(recording)
 
     def entities(path: Path) -> dict:
-        parsed = parse_file_entities(str(path))
-        return {k: v for k, v in parsed.items() if k not in _NOT_MATCHED}
+        return _filename_entities(path.name)[0]
 
     own = entities(recording)
     endings = tuple(f"_{suffix}{ext}" for ext in extensions)
+    bare = {f"{suffix}{ext}" for ext in extensions}  # dataset-level, e.g. "T1w.json"
 
     for folder in _inheritance_folders(recording):
+        if not folder.is_dir():  # e.g. a built path's datatype folder
+            continue
         candidates = []
         for path in folder.iterdir():
-            if path == recording or not path.is_file() or not path.name.endswith(endings):
+            if path == recording or not path.is_file():
+                continue
+            if not (path.name.endswith(endings) or path.name in bare):
                 continue
             theirs = entities(path)
             if all(key in own and own[key] == value for key, value in theirs.items()):
@@ -221,6 +227,11 @@ def _filename_entities(name: str) -> tuple[dict[str, str | int], str, str]:
         key, _, value = pair.partition("-")
         entities[key] = int(value) if key in _INDEX_KEYS and value.isdigit() else value
     return entities, suffix, extension
+
+
+def _as_index(value) -> int | str:
+    """An index entity value as a number: 1, "1" and "01" all give 1."""
+    return int(value) if str(value).isdigit() else value
 
 
 def find_padded(path: str | Path) -> list[Path]:
