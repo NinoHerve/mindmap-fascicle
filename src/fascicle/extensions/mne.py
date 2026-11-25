@@ -40,11 +40,12 @@ Every sidecar also has its own key, taking the recording's entities:
 Pass `raw=False` to `register` to skip all raw keys.
 
 Derivatives (prefixed keys, in the extension's own folder): `src`, `fwd`,
-`ave`, `i-ave`, `v-ave`, `cov` and `stc` (keys `mne-src`, `mne-cov`, ... by
+`trans`, `ave`, `i-ave`, `v-ave`, `cov` and `stc` (keys `mne-src`, `mne-cov`, ... by
 default) live under one derivatives root, named with
 `fascicle.derivative_namer`, e.g.
 
     <root>/sub-01/cov/sub-01_task-rest_cov.fif
+    <root>/sub-01/ses-meg/trans/sub-01_ses-meg_trans.fif             (trans)
     <root>/sub-01/ave/sub-01_task-rest_ave.fif                       (ave)
     <root>/sub-01/ave/sub-01_task-rest_signal-intracranial_ave.fif   (i-ave)
     <root>/sub-01/ave/sub-01_task-rest_signal-virtual_ave.fif        (v-ave)
@@ -55,29 +56,20 @@ is the "virtual" one, estimated by projecting a source reconstruction onto
 those contact locations. Both keep MNE's `_ave.fif` naming, told apart from
 the scalp `ave` by a custom `signal` entity fixed per key (you never pass it).
 
-Extra inputs are BIDS entities: `session`, `task`, `run`, `desc` (`src`/`fwd`
-take only `session`/`desc`). Unknown entities raise instead of being dropped.
+Extra inputs are BIDS entities: `session`, `task`, `run`, `desc` (`src`/`fwd`/
+`trans` take only `session`/`desc`). Unknown entities raise instead of being dropped.
 
 Paths are built without looking at the disk, so the folder doesn't need to
 exist yet (writing into a fresh derivatives folder works). For pybids
 queries on top, also call `dm.add_derivatives(root_key, root_path)` once
 the folder has a `dataset_description.json`.
 
-Subjects-dir files (prefixed keys, in an MNE/FreeSurfer subjects directory,
-registered with `register_subjects_dir`):
-
-    <root>/sub-01/sub-01-trans.fif            trans       head -> MRI `Transform` (read/write)
-    <root>/sub-01/bem/sub-01-head.fif         head        scalp, as `mne.read_bem_surfaces`
-    <root>/sub-01/bem/sub-01-head-dense.fif   head-dense  returns it (a list; read-only)
-
-`head` is what `mne watershed_bem` writes, `head-dense` what
-`mne make_scalp_surfaces` writes. The root is usually one already
-registered by `freesurfer.register`, so the keys share its prefix:
-
-    freesurfer.register(dm, root_key="coreg", root_path=".../coreg")
-    mne.register_subjects_dir(dm, root_key="coreg")
-    dm.save(trans, "01", "coreg-trans")
-    scalp = dm.load("01", "coreg-head-dense")[0]
+The coregistration's head -> MRI transform is a derivative too: `trans`
+(`mne-trans`), read/written as an `mne.transforms.Transform`. MNE takes it
+from any path. The scalp surfaces MNE writes into a FreeSurfer subject's
+`bem/` folder (`sub-XX-head.fif`, `sub-XX-head-dense.fif`) stay there, where
+MNE looks for them: they are FreeSurfer extension keys (`fs-head`,
+`fs-head-dense`).
 
 `mne` is an optional dependency (`pip install "mindmap-fascicle[mne]"`): it's only
 imported when a file is actually read or written.
@@ -93,7 +85,7 @@ import pandas as pd
 from ..datatype import Datatype, RawDatatype
 from ..extension import register_extension, register_raw
 from ..formats import _read_json, _read_tsv
-from ..naming import derivative_namer, subject_label
+from ..naming import derivative_namer
 from ..utils import find_sidecar
 
 logger = logging.getLogger("fascicle")
@@ -273,6 +265,22 @@ def _read_info_bids(path, suffix):
     return _apply_sidecars(_read_info(path), path, suffix)
 
 
+def _read_trans(path):
+    return _mne().read_trans(path, verbose="warning")
+
+
+def _write_trans(trans, path):
+    _mne().write_trans(path, trans, overwrite=True, verbose="warning")
+
+
+def _read_bem_surfaces(path):
+    """Read a BEM surface file as MNE's list of surface dicts.
+
+    Used by the FreeSurfer extension's `head`/`head-dense` keys.
+    """
+    return _mne().read_bem_surfaces(path, verbose="warning")
+
+
 def _read_src(path):
     return _mne().read_source_spaces(path, verbose="warning")
 
@@ -332,43 +340,12 @@ def _dt(suffix, reader, writer, entities=_FILE_ENTITIES, extensions=(".fif",), e
 DATATYPES: dict[str, Datatype] = {
     "src": _dt("src", _read_src, _write_src, _ANAT_ENTITIES),
     "fwd": _dt("fwd", _read_fwd, _write_fwd, _ANAT_ENTITIES),
+    "trans": _dt("trans", _read_trans, _write_trans, _ANAT_ENTITIES),
     "ave": _dt("ave", _read_evoked, _write_evoked),
     "i-ave": _dt("ave", _read_evoked, _write_evoked, signal="intracranial"),
     "v-ave": _dt("ave", _read_evoked, _write_evoked, signal="virtual"),
     "cov": _dt("cov", _read_cov, _write_cov),
     "stc": _dt("stc", _read_stc, _write_stc, extensions=None, exists=_stc_exists),
-}
-
-
-def build_subject_path(root: str | Path, subject: str, template: str) -> Path:
-    """Path in a subjects directory: `<root>/sub-XX/<template>`, `{sub}` -> "sub-XX".
-
-    `subject` is given with or without its "sub-" prefix.
-    """
-    sub = f"sub-{subject_label(subject)}"
-    return Path(root) / sub / template.format(sub=sub)
-
-
-def _read_trans(path):
-    return _mne().read_trans(path, verbose="warning")
-
-
-def _write_trans(trans, path):
-    _mne().write_trans(path, trans, overwrite=True, verbose="warning")
-
-
-def _read_bem_surfaces(path):
-    return _mne().read_bem_surfaces(path, verbose="warning")
-
-
-def _subject_dt(template, reader, writer):
-    return Datatype(partial(build_subject_path, template=template), reader, writer)
-
-
-SUBJECTS_DIR_DATATYPES: dict[str, Datatype] = {
-    "trans": _subject_dt("{sub}-trans.fif", _read_trans, _write_trans),
-    "head": _subject_dt("bem/{sub}-head.fif", _read_bem_surfaces, Datatype.READ_ONLY),
-    "head-dense": _subject_dt("bem/{sub}-head-dense.fif", _read_bem_surfaces, Datatype.READ_ONLY),
 }
 
 
@@ -445,43 +422,3 @@ def register(
         writers=writers,
     )
 
-
-def register_subjects_dir(
-    dm,
-    root_key: str = "fs",
-    root_path: str | Path | None = None,
-    namespace: str | None = None,
-    readers: dict[str, Any] | None = None,
-    writers: dict[str, Any] | None = None,
-) -> None:
-    """Register the MNE subjects-dir datatypes (`trans`, `head`, `head-dense`) on `dm`.
-
-    Parameters
-    ----------
-    dm: fascicle.DatasetManager
-    root_key: str
-        Root key for the MNE/FreeSurfer subjects directory. The default,
-        "fs", is the root `freesurfer.register` adds, as MNE's
-        SUBJECTS_DIR is usually the FreeSurfer one.
-    root_path: str | Path, optional
-        Path to add as `root_key` (needn't exist yet). If omitted,
-        `root_key` must already exist in `dm.roots`.
-    namespace: str, optional
-        Key prefix; defaults to `root_key`.
-    readers, writers: dict, optional
-        Bare datatype name -> replacement function.
-
-    Raises
-    ------
-    KeyError
-        If `root_path` is omitted and `root_key` isn't already registered.
-    """
-    register_extension(
-        dm,
-        SUBJECTS_DIR_DATATYPES,
-        root_key=root_key,
-        root_path=root_path,
-        namespace=namespace,
-        readers=readers,
-        writers=writers,
-    )

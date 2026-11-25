@@ -34,8 +34,8 @@ lh_coords, lh_faces = dm.load("01", "fs-pial", hemi="lh")
 mne.register(dm, root_path="/data/my_study/derivatives/mne")
 dm.save(cov, "01", "mne-cov", task="rest")       # sub-01/cov/sub-01_task-rest_cov.fif
 info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG, BIDS sidecars applied
-mne.register_subjects_dir(dm)                    # trans/head keys on the FreeSurfer subjects dir
-dm.save(trans, "01", "fs-trans")                 # sub-01/sub-01-trans.fif
+dm.save(trans, "01", "mne-trans", session="meg")   # sub-01/ses-meg/trans/sub-01_ses-meg_trans.fif
+scalp = dm.load("01", "fs-head-dense")[0]       # FreeSurfer subject's bem/sub-01-head-dense.fif
 ```
 
 `dm.get_path(...)` takes the same arguments as `load` and returns the path without touching the file (except for raw modalities, below, which are looked up in the BIDS index). Index entities (`run`, `echo`, ...) may be zero-padded to any width in BIDS, so raw keys find the file whatever its padding: `run=1` finds `run-01` or `run-001`, `split=1` finds `split-01`. `save` writes a new file with the values as given (`run=1` → `run-1`, `run="01"` → `run-01`), and refuses to create `run-1` next to an existing `run-01`.
@@ -70,10 +70,10 @@ dm.save(trans, "01", "fs-trans")                 # sub-01/sub-01-trans.fif
 
 | extension | keys (default prefix) | extra dependency |
 |---|---|---|
-| `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only), BEM surfaces `fs-iskull`/`oskull`/`skin` (`bem/inner_skull.surf`, `outer_skull.surf`, `outer_skin.surf`, as MNE's watershed/FLASH write them) | none |
+| `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only), BEM surfaces `fs-iskull`/`oskull`/`skin` (`bem/inner_skull.surf`, `outer_skull.surf`, `outer_skin.surf`, as MNE's watershed/FLASH write them), MNE scalp surfaces `fs-head`/`fs-head-dense` (`bem/sub-XX-head[-dense].fif`, read-only, need `mne`) | none (`mne` for `fs-head*`) |
 | `fascicle.extensions.charm` | `charm-seg`, `charm-t1` | none |
 | `fascicle.extensions.mindmap` | BEM surfaces from mindmap-bem: `mm-iskull`, `mm-oskull`, `mm-skin` | none |
-| `fascicle.extensions.mne` | raw (unprefixed, read-only): `meg`, `eeg`, `meg-info` (sidecars applied), `meg-file`, `eeg-file`, `meg-info-file` (as stored), sidecars `meg-`/`eeg-` + `channels`, `json`, `events`, `coordsystem`, plus `meg-headshape`, `eeg-electrodes`; derivatives: `mne-src`, `mne-fwd`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc`; subjects dir (`register_subjects_dir`, on the `fs` root by default): `fs-trans` (read/write), `fs-head`, `fs-head-dense` (read-only) | `mne` |
+| `fascicle.extensions.mne` | raw (unprefixed, read-only): `meg`, `eeg`, `meg-info` (sidecars applied), `meg-file`, `eeg-file`, `meg-info-file` (as stored), sidecars `meg-`/`eeg-` + `channels`, `json`, `events`, `coordsystem`, plus `meg-headshape`, `eeg-electrodes`; derivatives: `mne-src`, `mne-fwd`, `mne-trans`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc` | `mne` |
 
 Every extension has the same `register(dm, root_key=..., root_path=None, namespace=None, readers=None, writers=None)`. Keys are prefixed with `namespace`, which defaults to `root_key`; raw keys (MNE's `meg`, ...) aren't, and registering an extension twice keeps one set of them. To compare two FreeSurfer runs, register twice: `freesurfer.register(dm, root_key="fs_run2", root_path=...)` gives `fs_run2-t1`, ... The same works for BEM methods kept in separate subjects directories: `freesurfer.register(dm, root_key="watershed", root_path=...)` gives `watershed-iskull`.
 

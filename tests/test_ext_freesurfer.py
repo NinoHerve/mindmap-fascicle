@@ -1,5 +1,7 @@
 """Tests for fascicle.extensions.freesurfer."""
 
+import sys
+
 import nibabel as nib
 import numpy as np
 import pytest
@@ -212,7 +214,10 @@ def test_save_morph_round_trip(dm):
     np.testing.assert_array_equal(dm.load("01", "fs-thickness", hemi="rh"), values)
 
 
-@pytest.mark.parametrize("key, inputs", [("fs-cortex", {"hemi": "lh"}), ("fs-ras2tkras", {})])
+@pytest.mark.parametrize(
+    "key, inputs",
+    [("fs-cortex", {"hemi": "lh"}), ("fs-ras2tkras", {}), ("fs-head", {}), ("fs-head-dense", {})],
+)
 def test_read_only_datatypes_refuse_save(dm, key, inputs):
     with pytest.raises(TypeError, match="read-only"):
         dm.save(object(), "01", key, overwrite=True, **inputs)
@@ -290,3 +295,49 @@ def test_one_root_per_bem_method(bids_root, fs_root, tmp_path):
     assert manager.get_path("sub-01", "watershed-oskull") == (
         fs_root / "sub-01" / "bem" / "outer_skull.surf"
     )
+
+
+# --- MNE scalp surfaces (bem/sub-XX-head*.fif) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, filename", [("head", "sub-01-head.fif"), ("head-dense", "sub-01-head-dense.fif")]
+)
+@pytest.mark.parametrize("subject", ["01", "sub-01"])
+def test_head_paths(fs_root, name, filename, subject):
+    assert freesurfer.build_fs_path(fs_root, subject, name) == fs_root / "sub-01" / "bem" / filename
+
+
+def test_head_keys_registered_per_bem_method(bids_root, fs_root):
+    manager = DatasetManager(bids_root)
+    freesurfer.register(manager, root_path=fs_root)
+    freesurfer.register(manager, root_key="watershed", root_path=fs_root)
+
+    assert {"fs-head", "fs-head-dense", "watershed-head", "watershed-head-dense"} <= set(manager.registry)
+
+
+def test_head_dense_loads_mne_surfaces(dm, fs_root):
+    mne = pytest.importorskip("mne")
+    from mne.io.constants import FIFF
+
+    rr = np.array([[0, 0, 0], [0.1, 0, 0], [0, 0.1, 0], [0, 0, 0.1]], dtype=float)
+    tris = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+    surf = dict(id=FIFF.FIFFV_BEM_SURF_ID_HEAD, sigma=0.33, np=len(rr), ntri=len(tris),
+                coord_frame=FIFF.FIFFV_COORD_MRI, rr=rr, tris=tris)
+    mne.write_bem_surfaces(fs_root / "sub-01" / "bem" / "sub-01-head-dense.fif", [surf],
+                           verbose="warning")
+
+    loaded = dm.load("01", "fs-head-dense")
+
+    assert isinstance(loaded, list) and len(loaded) == 1
+    np.testing.assert_array_almost_equal(loaded[0]["rr"], rr)
+
+
+def test_head_keys_work_without_mne_until_read(dm, fs_root, monkeypatch):
+    monkeypatch.setitem(sys.modules, "mne", None)  # `import mne` now fails
+    path = dm.get_path("01", "fs-head")
+    path.touch()
+
+    assert path == fs_root / "sub-01" / "bem" / "sub-01-head.fif"
+    with pytest.raises(ImportError, match=r"mindmap-fascicle\[mne\]"):
+        dm.load("01", "fs-head")

@@ -112,21 +112,25 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   `label("sub-01")` workarounds. Its `head` (`sub-XX-head.fif`) and `t1` keys aren't in
   fascicle. Done in the manuscript with 0.3.0: `watershed-head` and `fs-done`
   (`scripts/recon-all.done`) stay local `add_datatype` keys.
-- [x] **MNE `trans` and BEM head keys in the MNE extension.** Done:
-  `mne.register_subjects_dir(dm, root_key=...)` adds `<root>-trans` (`sub-XX/sub-XX-trans.fif`,
-  read/write), `<root>-head` (`bem/sub-XX-head.fif`) and `<root>-head-dense`
-  (`bem/sub-XX-head-dense.fif`), read-only, as `mne.read_bem_surfaces` lists. Default root `fs`.
-  Checked on the manuscript's sub-01: same paths as its local keys, all load.
+- [x] **MNE `trans` and BEM head keys.** Done in 0.5.0 (0.4.0's `mne.register_subjects_dir`
+  is removed): `trans` is an MNE derivative, `mne-trans`
+  (`<mne root>/sub-XX[/ses-YY]/trans/sub-XX[_ses-YY]_trans.fif`, read/write, entities
+  `session`/`desc`). The scalp surfaces are FreeSurfer keys, read-only, as
+  `mne.read_bem_surfaces` lists: `<fs root>-head` (`bem/sub-XX-head.fif`) and
+  `<fs root>-head-dense` (`bem/sub-XX-head-dense.fif`). `freesurfer.register` adds them with no
+  extra call and only needs `mne` when one is read.
   Original request: The manuscript's coregistration
   writes `sub-XX/sub-XX-trans.fif` (in an MNE subjects dir) with a local `add_datatype` key
   (`coreg-trans`, read/written with `mne.read_trans` / `mne.write_trans(..., overwrite=True)`),
   and reads `bem/sub-XX-head-dense.fif` / `bem/sub-XX-head.fif` (`mne.read_bem_surfaces`) with
   local keys too (`coreg-head`, `watershed-head`). Suggested: `trans` (read/write) and `head`,
   `head-dense` (read-only) in `fascicle.extensions.mne`, on a subjects-dir root.
-- [ ] **Manuscript (after the next release):** replace the local `coreg-trans`, `coreg-head` and
-  `watershed-head` keys with `fmne.register_subjects_dir(dm, root_key="coreg")` /
-  `(root_key="watershed")`. `coreg-head` becomes `coreg-head-dense`; `FILES["ws_done"]` keeps
-  `watershed-head`.
+- [ ] **Manuscript (needs 0.5.0):** drop the local `coreg-trans`, `coreg-head` and
+  `watershed-head` keys. `watershed-head` and `coreg-head-dense` (was `coreg-head`,
+  `pipeline.py:465`) come from the existing `freesurfer.register` calls. The transform becomes
+  `mne-trans` in an MNE derivatives root (`fmne.register(dm, root_path=...)`), so the existing
+  `COREG_DIR/sub-XX/sub-XX-trans.fif` files are moved or recomputed; `FILES["coreg_trans"]`
+  points to `mne-trans` (with `session="meg"` if used).
 
 ## Notes
 

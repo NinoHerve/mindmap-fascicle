@@ -14,6 +14,8 @@ are per hemisphere: `dm.load("01", "fs-pial", hemi="lh")`.
 | ras2tkras                      | from the T1.mgz header   | none (derived)      |
 | iskull, oskull, skin           | read_surface             | write_surface       |
 | (bem/*.surf)                   |                          |                     |
+| head, head-dense               | mne.read_bem_surfaces    | none (read-only)    |
+| (bem/sub-XX-head*.fif)         | (needs mne)              |                     |
 
 Swap any reader/writer with `register(dm, readers={"t1": ants.image_read})`
 or `dm.set_reader("fs-t1", ...)`.
@@ -27,6 +29,13 @@ kept in separate subjects directories, register once per folder:
 
     freesurfer.register(dm, root_key="watershed", root_path=".../bem-watershed")
     dm.load("01", "watershed-iskull")        # (coords, faces), tkRAS mm
+
+The scalp surfaces MNE writes next to them are `head` (`sub-XX-head.fif`,
+from `mne watershed_bem`) and `head-dense` (`sub-XX-head-dense.fif`, from
+`mne make_scalp_surfaces`), read as MNE's list of surfaces:
+`dm.load("01", "fs-head-dense")[0]`. They need `mne` (`pip install
+"mindmap-fascicle[mne]"`), imported only when one is read. The head -> MRI
+transform fitted on them is an MNE derivative, `mne-trans`.
 
 `vol-info` and mindmap's own BEM loaders stay mindmap-side (see PLAN.md);
 mindmap-bem's surfaces are in `fascicle.extensions.mindmap` (`mm-iskull`, ...).
@@ -60,6 +69,8 @@ _FS_MAP: dict[str, tuple[str, str]] = {
     "iskull": ("bem", "inner_skull.surf"),
     "oskull": ("bem", "outer_skull.surf"),
     "skin": ("bem", "outer_skin.surf"),
+    "head": ("bem", "{sub}-head.fif"),
+    "head-dense": ("bem", "{sub}-head-dense.fif"),
 }
 
 # BEM surface keys; files keep MNE's names (see _FS_MAP)
@@ -99,7 +110,7 @@ def build_fs_path(
     folder, file_tmpl = _FS_MAP[datatype]
     if "{hemi}" in file_tmpl and hemi not in ("lh", "rh"):
         raise ValueError(f"FS datatype '{datatype}' needs hemi='lh' or hemi='rh', got {hemi!r}.")
-    filename = file_tmpl.format(hemi=hemi)
+    filename = file_tmpl.format(hemi=hemi, sub=f"sub-{sub_id}")
 
     return sub_dir / folder / filename
 
@@ -120,6 +131,17 @@ def write_surface(surface: tuple, path: str | Path) -> None:
     nib.freesurfer.io.write_geometry(
         path, coords, faces, volume_info=volume_info[0] if volume_info else None
     )
+
+
+def _read_head(path: str | Path) -> list[dict]:
+    """Read an MNE scalp surface file (`bem/sub-XX-head*.fif`) with `mne.read_bem_surfaces`.
+
+    Returns MNE's list of surface dicts. Needs `mne`, imported only here, so
+    the rest of the extension works without it.
+    """
+    from .mne import _read_bem_surfaces
+
+    return _read_bem_surfaces(path)
 
 
 def _write_morph_data(values: np.ndarray, path: str | Path) -> None:
@@ -165,6 +187,8 @@ DATATYPES: dict[str, Datatype] = {
     # explicitly read-only or saving would overwrite the T1 via the .mgz writer.
     "ras2tkras": Datatype(_namer("t1"), _read_ras2tkras, Datatype.READ_ONLY),
     **{name: Datatype(_namer(name), read_surface, write_surface) for name in BEM_SURFACES},
+    # Written by MNE's tools, read back by MNE from this folder: read-only here.
+    **{name: Datatype(_namer(name), _read_head, Datatype.READ_ONLY) for name in ("head", "head-dense")},
 }
 
 
