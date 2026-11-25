@@ -45,6 +45,7 @@ def fs_root(tmp_path):
     (sub / "mri").mkdir(parents=True)
     (sub / "surf").mkdir(parents=True)
     (sub / "label").mkdir(parents=True)
+    (sub / "bem").mkdir(parents=True)
 
     img = nib.MGHImage(np.zeros((5, 5, 5), dtype=np.float32), np.eye(4))
     nib.save(img, sub / "mri" / "T1.mgz")
@@ -71,6 +72,9 @@ def fs_root(tmp_path):
             sub / "surf" / f"{hemi}.sulc", np.array([-1.0, 0.0, 1.0], dtype=np.float32)
         )
         _write_label(sub / "label" / f"{hemi}.cortex.label", [0, 1])
+
+    for scale, name in enumerate(("inner_skull", "outer_skull", "outer_skin"), start=1):
+        nib.freesurfer.io.write_geometry(sub / "bem" / f"{name}.surf", coords * scale, faces)
 
     return root
 
@@ -117,3 +121,21 @@ def raw_root(bids_root):
     (sub / "foo").mkdir()
     (sub / "foo" / "sub-01_task-x_acq-y_bar.xyz").touch()
     return bids_root
+
+
+@pytest.fixture
+def volume_info():
+    """The volume info block FreeSurfer surfaces carry (nibabel's key order)."""
+    from collections import OrderedDict
+
+    return OrderedDict(
+        head=np.array([2, 0, 20], dtype=np.int32),
+        valid="1  # volume info valid",
+        filename="T1.mgz",
+        volume=np.array([256, 256, 256]),
+        voxelsize=np.array([1.0, 1.0, 1.0]),
+        xras=np.array([-1.0, 0.0, 0.0]),
+        yras=np.array([0.0, 0.0, -1.0]),
+        zras=np.array([0.0, 1.0, 0.0]),
+        cras=np.array([1.0, 2.0, 3.0]),
+    )

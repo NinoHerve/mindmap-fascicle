@@ -883,3 +883,60 @@ def test_missing_file_message_mentions_padding(bids_root):
 
     with pytest.raises(FileNotFoundError, match="zero-padding"):
         dm.load("01", "T1w", run=9)
+
+
+# --- subject given as "01" or "sub-01" -----------------------------------------
+
+
+def test_sub_prefix_gives_same_path(bids_root):
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("sub-01", "T1w") == dm.get_path("01", "T1w")
+    assert dm.get_path("sub-01", "T1w").name == "sub-01_T1w.nii.gz"
+
+
+def test_load_with_sub_prefix(bids_root):
+    dm = DatasetManager(bids_root)
+
+    assert dm.load("sub-01", "T1w").shape == (2, 3, 4)
+
+
+def test_save_with_sub_prefix(bids_root):
+    dm = DatasetManager(bids_root)
+
+    path = dm.save(nib.Nifti1Image(np.zeros((2, 3, 4)), np.eye(4)), "sub-01", "T1w", session="new")
+
+    assert path == bids_root / "sub-01" / "ses-new" / "anat" / "sub-01_ses-new_T1w.nii.gz"
+
+
+def test_unknown_subject_message_has_single_prefix(bids_root):
+    dm = DatasetManager(bids_root)
+
+    with pytest.raises(ValueError, match="Subject sub-99 does") as info:
+        dm.load("sub-99", "T1w")
+    assert "sub-sub" not in str(info.value)
+
+
+def test_custom_namer_receives_bare_label(bids_root, tmp_path):
+    seen = []
+    dm = DatasetManager(bids_root)
+    dm.add_root("custom", tmp_path)
+    dm.add_datatype("custom", "custom", lambda root, subject: seen.append(subject) or root)
+
+    dm.get_path("sub-01", "custom")
+
+    assert seen == ["01"]
+
+
+def test_bids_namer_called_directly_strips_prefix(bids_root):
+    dm = DatasetManager(bids_root)
+    namer = dm.bids_namer("T1w")
+
+    assert namer(None, "sub-01") == namer(None, "01")
+
+
+def test_raw_lookup_with_sub_prefix(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("bar", "bar")
+
+    assert dm.get_path("sub-01", "bar") == dm.get_path("01", "bar")

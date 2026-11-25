@@ -40,6 +40,7 @@ info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG,
 
 ## Concepts
 
+- **Subjects**: pass `"01"` or `"sub-01"`, both name the same files everywhere; `dm.get_subjects()` returns bare labels (`["01", ...]`).
 - **Roots**: named folders (`dm.roots`). `"raw"` is the BIDS dataset; extensions add their own (`"fs"`, `"mne"`, ...) with `add_root`.
 - **Datatypes**: every key in `dm.registry` (`"T1w"`, `"fs-pial"`, `"mne-cov"`) is a `Datatype` with
   - a **namer**, `namer(root, subject, **inputs) -> Path`, which only builds the path, so the same namer works for loading and saving. Inputs are BIDS entities (`session`, `task`, ...) or tool-specific ones (`hemi`);
@@ -67,11 +68,12 @@ info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG,
 
 | extension | keys (default prefix) | extra dependency |
 |---|---|---|
-| `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only) | none |
+| `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only), BEM surfaces `fs-iskull`/`oskull`/`skin` (`bem/inner_skull.surf`, `outer_skull.surf`, `outer_skin.surf`, as MNE's watershed/FLASH write them) | none |
 | `fascicle.extensions.charm` | `charm-seg`, `charm-t1` | none |
+| `fascicle.extensions.mindmap` | BEM surfaces from mindmap-bem: `mm-iskull`, `mm-oskull`, `mm-skin` | none |
 | `fascicle.extensions.mne` | raw (unprefixed, read-only): `meg`, `eeg`, `meg-info` (sidecars applied), `meg-file`, `eeg-file`, `meg-info-file` (as stored), sidecars `meg-`/`eeg-` + `channels`, `json`, `events`, `coordsystem`, plus `meg-headshape`, `eeg-electrodes`; derivatives: `mne-src`, `mne-fwd`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc` | `mne` |
 
-Every extension has the same `register(dm, root_key=..., root_path=None, namespace=None, readers=None, writers=None)`. Keys are prefixed with `namespace`, which defaults to `root_key`; raw keys (MNE's `meg`, ...) aren't, and registering an extension twice keeps one set of them. To compare two FreeSurfer runs, register twice: `freesurfer.register(dm, root_key="fs_run2", root_path=...)` gives `fs_run2-t1`, ...
+Every extension has the same `register(dm, root_key=..., root_path=None, namespace=None, readers=None, writers=None)`. Keys are prefixed with `namespace`, which defaults to `root_key`; raw keys (MNE's `meg`, ...) aren't, and registering an extension twice keeps one set of them. To compare two FreeSurfer runs, register twice: `freesurfer.register(dm, root_key="fs_run2", root_path=...)` gives `fs_run2-t1`, ... The same works for BEM methods kept in separate subjects directories: `freesurfer.register(dm, root_key="watershed", root_path=...)` gives `watershed-iskull`.
 
 ## Swapping a reader or writer
 

@@ -24,6 +24,7 @@ from bids import BIDSLayout
 from . import formats
 from .config import read_config
 from .datatype import Datatype, RawDatatype
+from .naming import subject_label
 from .utils import build_bids_path, find_padded, find_sidecar, parse_extension
 
 
@@ -208,7 +209,7 @@ class DatasetManager:
         """
 
         def namer(root: Any, subject: str, **entities) -> Path:
-            return Path(build_bids_path(self.layout, subject, suffix, **entities))
+            return Path(build_bids_path(self.layout, subject_label(subject), suffix, **entities))
 
         namer.__name__ = f"bids_namer({suffix!r})"
         namer.padding_lookup = True
@@ -285,7 +286,7 @@ class DatasetManager:
         if isinstance(extensions, str):
             extensions = (extensions,)
         query = {
-            "subject": str(subject).replace("sub-", ""),
+            "subject": subject_label(subject),
             **(entry.filters or {}),
             **entities,
         }
@@ -375,7 +376,7 @@ class DatasetManager:
         """
         dt = self._entry(key)
         root = self.roots[dt.root_key] if dt.root_key is not None else None
-        path = Path(dt.namer(root, subject, **inputs))
+        path = Path(dt.namer(root, subject_label(subject), **inputs))
 
         if getattr(dt.namer, "padding_lookup", False) and not path.exists():
             padded = find_padded(path)
@@ -392,6 +393,7 @@ class DatasetManager:
 
     def load(self, subject: str, key: str, **inputs) -> Any:
         """Build the path of datatype `key` for `subject` and read it."""
+        subject = subject_label(subject)
         if subject not in self.subjects:
             raise ValueError(f"Subject sub-{subject} does not exist in dataset.")
 

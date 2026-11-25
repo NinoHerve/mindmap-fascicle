@@ -65,6 +65,11 @@ BIDS_ENTITIES: tuple[tuple[str, str, str, tuple[str, ...] | None], ...] = (
     ("desc", "desc", "label", None),
 )
 
+def subject_label(subject) -> str:
+    """Return the bare subject label: "sub-01" and "01" both give "01"."""
+    return str(subject).removeprefix("sub-")
+
+
 _FORMATS = {"label": re.compile(r"[0-9a-zA-Z+]+"), "index": re.compile(r"[0-9]+")}
 _SPEC = {name: (key, fmt, allowed) for name, key, fmt, allowed in BIDS_ENTITIES}
 
@@ -231,7 +236,7 @@ def derivative_namer(
             if ent in rows and value is not None:
                 _check_value(rows[ent], value)
 
-        source = {"subject": str(subject).replace("sub-", ""), **values}
+        source = {"subject": subject_label(subject), **values}
         relative = build_path(source, [pattern], strict=True)
         if relative is None:
             raise ValueError(f"Could not name '{suffix}' with {values} (pattern: {pattern}).")

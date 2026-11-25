@@ -19,6 +19,7 @@ from typing import Any
 
 from ..datatype import Datatype
 from ..extension import register_extension
+from ..naming import subject_label
 
 _CHARM_MAP: dict[str, tuple[str, str]] = {
     "seg": ("segmentation", "labeling.nii.gz"),
@@ -45,7 +46,7 @@ def build_charm_path(root: str | Path, subject: str, datatype: str) -> Path:
     ValueError
         If `datatype` is not a known charm datatype.
     """
-    sub_id = str(subject).replace("sub-", "")
+    sub_id = subject_label(subject)
     sub_dir = Path(root) / f"sub-{sub_id}" / f"m2m_sub-{sub_id}"
 
     if datatype not in _CHARM_MAP:

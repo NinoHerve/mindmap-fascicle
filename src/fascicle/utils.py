@@ -9,7 +9,7 @@ from pathlib import Path
 
 from bids.layout import parse_file_entities
 
-from .naming import BIDS_ENTITIES
+from .naming import BIDS_ENTITIES, subject_label  # noqa: F401 - re-exported
 
 
 # Two-part extensions treated as one, e.g. BIDS's compressed images and

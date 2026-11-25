@@ -293,3 +293,10 @@ def test_find_padded_does_not_pad_labels(tmp_path):
 
 def test_find_padded_missing_folder(tmp_path):
     assert find_padded(tmp_path / "nope" / "sub-01_run-1_T1w.nii.gz") == []
+
+
+def test_subject_label_strips_leading_prefix_only():
+    from fascicle.utils import subject_label
+
+    assert subject_label("sub-01") == subject_label("01") == "01"
+    assert subject_label("01sub-x") == "01sub-x"

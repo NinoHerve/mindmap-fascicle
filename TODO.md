@@ -89,6 +89,25 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
     accepts both forms. Alternatively, reject `sub-` everywhere with a clear error.
   - Manuscript workaround: it passes bare labels (`common.label()`).
 
+## Requests (2026-11-25)
+
+- [x] **A subject given as `"sub-01"` or `"01"` names the same files.** Extension namers
+  already stripped `sub-`; the core didn't (`get_path("sub-01", "T1w")` built
+  `sub-sub-01/...`, `load` raised `Subject sub-sub-01 does not exist`). Done: `get_path`,
+  `load`, `save` and `bids_namer` strip a leading `sub-` (`fascicle.naming.subject_label`).
+- [x] **BEM surfaces, one key per surface.** Done:
+  - FreeSurfer extension: `fs-iskull`, `fs-oskull`, `fs-skin` (files
+    `<root>/sub-XX/bem/inner_skull.surf`, `outer_skull.surf`, `outer_skin.surf`, as MNE's
+    watershed/FLASH write them; keys without underscores, closer to BIDS labels). Register once per
+    BEM method folder: `freesurfer.register(dm, root_key="watershed", root_path=...)`.
+  - New `fascicle.extensions.mindmap` (default prefix `mm`), starting with mindmap-bem's
+    surfaces: `mm-iskull`, `mm-oskull`, `mm-skin`.
+  - Read as `(coords, faces)`; saving accepts `(coords, faces, volume_info)` and keeps it.
+- [ ] **Manuscript:** replace the local `BEM_DATATYPES` in `processing/common.py` with
+  `freesurfer.register(...)` per MNE BEM method and `mindmap.register(...)`, and drop the
+  `label("sub-01")` workarounds. Its `head` (`sub-XX-head.fif`) and `t1` keys aren't in
+  fascicle.
+
 ## Notes
 
 - Version used by the manuscript: 0.2.0 from PyPI (pinned, `[mne]`), no longer an editable

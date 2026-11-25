@@ -28,6 +28,9 @@ from fascicle.extensions import freesurfer
         ("thickness", "rh", "sub-01/surf/rh.thickness"),
         ("sulc", "rh", "sub-01/surf/rh.sulc"),
         ("cortex", "rh", "sub-01/label/rh.cortex.label"),
+        ("iskull", None, "sub-01/bem/inner_skull.surf"),
+        ("oskull", None, "sub-01/bem/outer_skull.surf"),
+        ("skin", None, "sub-01/bem/outer_skin.surf"),
     ],
 )
 def test_build_fs_path_datatype_and_hemi(datatype, hemi, expected_suffix):
@@ -46,7 +49,8 @@ def test_build_fs_path_unknown_datatype_raises():
         freesurfer.build_fs_path("/fs", "01", "bogus")
 
 
-def test_build_fs_path_excludes_bem():
+def test_build_fs_path_has_no_generic_bem_datatype():
+    # BEM surfaces are separate datatypes (iskull, ...), not one "bem"
     with pytest.raises(ValueError):
         freesurfer.build_fs_path("/fs", "01", "bem")
 
@@ -238,3 +242,51 @@ def test_ras2tkras_save_leaves_t1_untouched(dm, fs_root):
 
 def test_describe_shows_bound_namer(dm):
     assert dm.describe("fs-pial")["namer"] == "build_fs_path(datatype='pial')"
+
+
+# --- BEM surfaces (bem/*.surf) -------------------------------------------------
+
+
+@pytest.mark.parametrize("name, scale", [("iskull", 1), ("oskull", 2), ("skin", 3)])
+def test_load_bem_surfaces(dm, name, scale):
+    coords, faces = dm.load("01", f"fs-{name}")
+
+    assert coords[1].tolist() == [scale, 0, 0]
+    assert faces.tolist() == [[0, 1, 2]]
+
+
+def test_bem_surfaces_declare_no_hemi(dm):
+    assert dm.describe("fs-iskull")["inputs"] == ()
+    assert dm.get_path("01", "fs-iskull").name == "inner_skull.surf"
+
+
+def test_save_bem_surface_keeps_volume_info(dm, fs_root, volume_info):
+    coords = np.array([[0, 0, 0], [5, 0, 0], [0, 5, 0]], dtype=np.float32)
+    faces = np.array([[0, 1, 2]], dtype=np.int32)
+
+    path = dm.save((coords, faces, volume_info), "02", "fs-skin")
+    *_, written = nib.freesurfer.io.read_geometry(path, read_metadata=True)
+
+    assert path == fs_root / "sub-02" / "bem" / "outer_skin.surf"
+    np.testing.assert_array_equal(dm.load("02", "fs-skin")[0], coords)
+    np.testing.assert_array_equal(written["cras"], [1.0, 2.0, 3.0])
+    assert written["filename"] == "T1.mgz"
+
+
+def test_save_surface_without_volume_info_still_works(dm):
+    coords = np.zeros((3, 3), dtype=np.float32)
+    faces = np.array([[0, 1, 2]], dtype=np.int32)
+
+    path = dm.save((coords, faces), "02", "fs-iskull")
+
+    assert path.name == "inner_skull.surf"
+
+
+def test_one_root_per_bem_method(bids_root, fs_root, tmp_path):
+    manager = DatasetManager(bids_root)
+    freesurfer.register(manager, root_key="watershed", root_path=fs_root)
+
+    assert manager.load("01", "watershed-iskull")[1].tolist() == [[0, 1, 2]]
+    assert manager.get_path("sub-01", "watershed-oskull") == (
+        fs_root / "sub-01" / "bem" / "outer_skull.surf"
+    )

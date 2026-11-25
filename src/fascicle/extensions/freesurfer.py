@@ -1,6 +1,6 @@
 """FreeSurfer recon-all extension.
 
-Covers a recon-all subjects directory (`<root>/sub-XX/{mri,surf,label}`).
+Covers a recon-all subjects directory (`<root>/sub-XX/{mri,surf,label,bem}`).
 Registered keys are prefixed with the namespace (default: the root key,
 "fs"): `fs-t1`, `fs-pial`, ... Surface, morphometry and label datatypes
 are per hemisphere: `dm.load("01", "fs-pial", hemi="lh")`.
@@ -12,10 +12,24 @@ are per hemisphere: `dm.load("01", "fs-pial", hemi="lh")`.
 | area, curv, thickness, sulc    | read_morph_data          | write_morph_data    |
 | cortex                         | read_label               | none (read-only)    |
 | ras2tkras                      | from the T1.mgz header   | none (derived)      |
+| iskull, oskull, skin           | read_surface             | write_surface       |
+| (bem/*.surf)                   |                          |                     |
 
 Swap any reader/writer with `register(dm, readers={"t1": ants.image_read})`
-or `dm.set_reader("fs-t1", ...)`. Deliberately excludes bem/vol-info,
-which stay mindmap-side (see PLAN.md).
+or `dm.set_reader("fs-t1", ...)`.
+
+The BEM surfaces are those MNE writes into a subject's `bem/` folder
+(`mne watershed_bem --copy`, `mne flash_bem --copy`), under the names
+`mne.make_bem_model` reads: `iskull` is `inner_skull.surf`, `oskull`
+`outer_skull.surf` and `skin` `outer_skin.surf` (keys without underscores,
+closer to BIDS labels; the files keep MNE's names). To compare BEM methods
+kept in separate subjects directories, register once per folder:
+
+    freesurfer.register(dm, root_key="watershed", root_path=".../bem-watershed")
+    dm.load("01", "watershed-iskull")        # (coords, faces), tkRAS mm
+
+`vol-info` and mindmap's own BEM loaders stay mindmap-side (see PLAN.md);
+mindmap-bem's surfaces are in `fascicle.extensions.mindmap` (`mm-iskull`, ...).
 """
 
 from functools import partial
@@ -27,6 +41,7 @@ import numpy as np
 
 from ..datatype import Datatype
 from ..extension import register_extension
+from ..naming import subject_label
 
 _FS_MAP: dict[str, tuple[str, str]] = {
     "t1": ("mri", "T1.mgz"),
@@ -42,7 +57,13 @@ _FS_MAP: dict[str, tuple[str, str]] = {
     "thickness": ("surf", "{hemi}.thickness"),
     "sulc": ("surf", "{hemi}.sulc"),
     "cortex": ("label", "{hemi}.cortex.label"),
+    "iskull": ("bem", "inner_skull.surf"),
+    "oskull": ("bem", "outer_skull.surf"),
+    "skin": ("bem", "outer_skin.surf"),
 }
+
+# BEM surface keys; files keep MNE's names (see _FS_MAP)
+BEM_SURFACES = ("iskull", "oskull", "skin")
 
 
 def build_fs_path(
@@ -69,7 +90,7 @@ def build_fs_path(
         If `datatype` is not a known FreeSurfer datatype, or is
         hemisphere-specific and `hemi` isn't "lh"/"rh".
     """
-    sub_id = str(subject).replace("sub-", "")
+    sub_id = subject_label(subject)
     sub_dir = Path(root) / f"sub-{sub_id}"
 
     if datatype not in _FS_MAP:
@@ -83,10 +104,22 @@ def build_fs_path(
     return sub_dir / folder / filename
 
 
-def _write_geometry(surface: tuple[np.ndarray, np.ndarray], path: str | Path) -> None:
-    """Write a `(coords, faces)` surface, as returned by `read_geometry`."""
-    coords, faces = surface
-    nib.freesurfer.io.write_geometry(path, coords, faces)
+def read_surface(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read a FreeSurfer surface as `(coords, faces)` (coords in tkRAS mm)."""
+    return nib.freesurfer.io.read_geometry(path)
+
+
+def write_surface(surface: tuple, path: str | Path) -> None:
+    """Write a FreeSurfer surface from `(coords, faces)` or `(coords, faces, volume_info)`.
+
+    `volume_info` (as `read_geometry(..., read_metadata=True)` returns it)
+    records the volume whose tkRAS the coordinates are in; MNE and
+    FreeSurfer read it back.
+    """
+    coords, faces, *volume_info = surface
+    nib.freesurfer.io.write_geometry(
+        path, coords, faces, volume_info=volume_info[0] if volume_info else None
+    )
 
 
 def _write_morph_data(values: np.ndarray, path: str | Path) -> None:
@@ -114,7 +147,7 @@ DATATYPES: dict[str, Datatype] = {
     **{name: Datatype(_namer(name)) for name in ("t1", "brain", "orig", "aseg")},
     **{
         name: Datatype(
-            _namer(name), nib.freesurfer.io.read_geometry, _write_geometry, inputs=_HEMI
+            _namer(name), nib.freesurfer.io.read_geometry, write_surface, inputs=_HEMI
         )
         for name in ("white", "pial", "inflated", "sphere")
     },
@@ -131,6 +164,7 @@ DATATYPES: dict[str, Datatype] = {
     # Derived from T1.mgz's header: its path is T1.mgz, so it must be
     # explicitly read-only or saving would overwrite the T1 via the .mgz writer.
     "ras2tkras": Datatype(_namer("t1"), _read_ras2tkras, Datatype.READ_ONLY),
+    **{name: Datatype(_namer(name), read_surface, write_surface) for name in BEM_SURFACES},
 }
 
 
