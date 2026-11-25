@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Distribution name on PyPI ("fascicle" is taken by an unrelated project);
 # the import name stays `fascicle`.
 name = "mindmap-fascicle"
-version = "0.4.0"
+version = "0.5.0"
 description = "Read and write BIDS neuroimaging datasets, with extensions for FreeSurfer, SimNIBS charm and MNE-Python derivatives."
 readme = "README.md"
 license = "MIT"
