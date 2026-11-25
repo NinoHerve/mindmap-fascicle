@@ -1,8 +1,8 @@
-"""Tests for fascicle.utils: parse_extension, check_file, build_bids_path."""
+"""Tests for fascicle.utils: parse_extension, check_file, build_bids_path, find_sidecar."""
 
 import pytest
 
-from fascicle.utils import build_bids_path, check_file, parse_extension
+from fascicle.utils import build_bids_path, check_file, find_sidecar, parse_extension
 
 
 class _FakeLayout:
@@ -107,3 +107,136 @@ def test_build_bids_path_unresolvable_raises():
 
     with pytest.raises(ValueError):
         build_bids_path(layout, subject="01", suffix="T1w")
+
+
+# --- find_sidecar (BIDS inheritance) ----------------------------------------
+
+
+@pytest.fixture
+def dataset(tmp_path):
+    """A recording two levels below the dataset root."""
+    root = tmp_path / "ds"
+    meg = root / "sub-01" / "ses-a" / "meg"
+    meg.mkdir(parents=True)
+    (root / "dataset_description.json").write_text("{}")
+    recording = meg / "sub-01_ses-a_task-x_run-01_meg.fif"
+    recording.touch()
+    return root, recording
+
+
+def test_find_sidecar_inherits_from_session_level(dataset):
+    root, recording = dataset
+    channels = root / "sub-01" / "ses-a" / "sub-01_ses-a_task-x_channels.tsv"
+    channels.touch()
+
+    assert find_sidecar(recording, "channels", ".tsv") == channels
+
+
+def test_find_sidecar_from_dataset_root(dataset):
+    root, recording = dataset
+    sidecar = root / "task-x_meg.json"
+    sidecar.touch()
+
+    assert find_sidecar(recording, "meg", ".json") == sidecar
+
+
+def test_find_sidecar_nearest_level_wins(dataset):
+    root, recording = dataset
+    (root / "task-x_channels.tsv").touch()
+    near = recording.parent / "sub-01_ses-a_channels.tsv"
+    near.touch()
+
+    assert find_sidecar(recording, "channels", ".tsv") == near
+
+
+def test_find_sidecar_most_specific_wins_within_a_level(dataset):
+    _, recording = dataset
+    (recording.parent / "sub-01_ses-a_channels.tsv").touch()
+    specific = recording.parent / "sub-01_ses-a_task-x_run-01_channels.tsv"
+    specific.touch()
+
+    assert find_sidecar(recording, "channels", ".tsv") == specific
+
+
+def test_find_sidecar_ignores_sidecars_of_other_recordings(dataset):
+    _, recording = dataset
+    (recording.parent / "sub-01_ses-a_task-y_channels.tsv").touch()
+    (recording.parent / "sub-01_ses-a_task-x_run-02_channels.tsv").touch()
+
+    with pytest.raises(FileNotFoundError, match="channels"):
+        find_sidecar(recording, "channels", ".tsv")
+
+
+def test_find_sidecar_equally_specific_candidates_raise(dataset):
+    _, recording = dataset
+    (recording.parent / "sub-01_ses-a_task-x_channels.tsv").touch()
+    (recording.parent / "sub-01_ses-a_run-01_channels.tsv").touch()
+
+    with pytest.raises(ValueError, match="Several"):
+        find_sidecar(recording, "channels", ".tsv")
+
+
+def test_find_sidecar_stops_at_dataset_root(dataset, tmp_path):
+    _, recording = dataset
+    (tmp_path / "task-x_meg.json").touch()  # above the dataset root
+
+    with pytest.raises(FileNotFoundError):
+        find_sidecar(recording, "meg", ".json")
+
+
+def test_find_sidecar_for_directory_recording(dataset):
+    _, recording = dataset
+    ds = recording.parent / "sub-01_ses-a_task-y_meg.ds"
+    ds.mkdir()
+    channels = recording.parent / "sub-01_ses-a_task-y_channels.tsv"
+    channels.touch()
+
+    assert find_sidecar(ds, "channels", ".tsv") == channels
+
+
+def test_find_sidecar_without_description_searches_up_to_dataset_folder(dataset):
+    root, recording = dataset
+    (root / "dataset_description.json").unlink()
+    sidecar = root / "task-x_meg.json"
+    sidecar.touch()
+
+    assert find_sidecar(recording, "meg", ".json") == sidecar
+
+
+def test_find_sidecar_without_description_stops_above_subject(dataset, tmp_path):
+    root, recording = dataset
+    (root / "dataset_description.json").unlink()
+    (tmp_path / "task-x_meg.json").touch()  # outside the dataset folder
+
+    with pytest.raises(FileNotFoundError):
+        find_sidecar(recording, "meg", ".json")
+
+
+def test_find_sidecar_outside_bids_searches_own_folder_only(tmp_path):
+    folder = tmp_path / "loose" / "files"
+    folder.mkdir(parents=True)
+    recording = folder / "sub-01_task-x_meg.fif"
+    recording.touch()
+    (tmp_path / "loose" / "task-x_meg.json").touch()  # a level up: not searched
+    here = folder / "sub-01_task-x_channels.tsv"
+    here.touch()
+
+    assert find_sidecar(recording, "channels", ".tsv") == here
+    with pytest.raises(FileNotFoundError):
+        find_sidecar(recording, "meg", ".json")
+
+
+def test_find_sidecar_accepts_several_extensions(dataset):
+    _, recording = dataset
+    sidecar = recording.parent / "sub-01_ses-a_task-x_run-01_channels.json"
+    sidecar.touch()
+
+    assert find_sidecar(recording, "channels", (".tsv", ".json")) == sidecar
+
+
+def test_find_sidecar_skips_folder_named_like_a_sidecar(dataset):
+    _, recording = dataset
+    (recording.parent / "sub-01_ses-a_task-x_channels.tsv").mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        find_sidecar(recording, "channels", ".tsv")

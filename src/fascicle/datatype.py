@@ -93,9 +93,13 @@ class RawDatatype:
         accepts any extension.
     filters: dict, optional
         Extra pybids filters always applied, e.g. `{"datatype": "eeg"}`.
+    sidecar_of: str, optional
+        Key of a raw recording: this is then that recording's `suffix`
+        sidecar, found by BIDS inheritance (e.g. `channels.tsv` of `meg`).
     """
 
     suffix: str
     reader: Callable[[Path], Any] | None = None
     extensions: tuple[str, ...] | None = None
     filters: dict[str, Any] | None = None
+    sidecar_of: str | None = None

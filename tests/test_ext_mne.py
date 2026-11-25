@@ -225,3 +225,266 @@ def test_meg_save_refused(meg_dm):
 
     with pytest.raises(TypeError, match="read-only"):
         dm.save(object(), "01", "meg", session="a", task="x", run=1, overwrite=True)
+
+
+# --- BIDS sidecars ------------------------------------------------------------
+
+
+def _write_meg(bids_root, mne, line_freq=None):
+    """One FIF run with EEG061 mislabelled as EEG, as in ds000117."""
+    info = mne.create_info(["MEG0111", "EEG001", "EEG061"], 100.0, ["mag", "eeg", "eeg"])
+    if line_freq is not None:
+        info["line_freq"] = line_freq
+    meg = bids_root / "sub-01" / "ses-a" / "meg"
+    meg.mkdir(parents=True)
+    raw = mne.io.RawArray(np.zeros((3, 10)), info, verbose="warning")
+    raw.save(meg / "sub-01_ses-a_task-x_run-01_meg.fif", verbose="warning")
+    return meg
+
+
+@pytest.fixture
+def sidecar_dm(bids_root, tmp_path, mne):
+    """MEG run plus session-level channels.tsv/meg.json and run-level sidecars."""
+    meg = _write_meg(bids_root, mne, line_freq=60.0)
+    session = meg.parent
+    (session / "sub-01_ses-a_task-x_channels.tsv").write_text(
+        "name\ttype\tunits\tstatus\n"
+        "MEG0111\tMEGMAG\tT\tgood\n"
+        "EEG001\tEEG\tV\tbad\n"
+        "EEG061\tHEOG\tV\tgood\n"
+        "CHPI001\tMISC\tn/a\tgood\n"  # listed, but not in the file
+    )
+    (session / "sub-01_ses-a_task-x_meg.json").write_text('{"PowerLineFrequency": 50}')
+    (meg / "sub-01_ses-a_coordsystem.json").write_text('{"MEGCoordinateUnits": "mm"}')
+    (meg / "sub-01_ses-a_headshape.pos").write_text("2\nHP1 1.0 2.0 3.0\nEEG1 4 5 6\n")
+    (meg / "sub-01_ses-a_task-x_run-01_events.tsv").write_text("onset\tduration\n0.5\t0\n")
+
+    eeg = bids_root / "sub-01" / "eeg"
+    eeg.mkdir()
+    (eeg / "sub-01_task-x_eeg.vhdr").touch()
+    (eeg / "sub-01_electrodes.tsv").write_text("name\tx\ty\tz\nFz\t0\t1\t2\n")
+
+    manager = DatasetManager(bids_root)
+    mne_ext.register(manager, root_path=tmp_path / "derivatives" / "mne")
+    return manager
+
+
+RUN = {"session": "a", "task": "x", "run": 1}
+
+
+def test_all_raw_keys_registered(dm):
+    expected = {
+        "meg", "meg-file", "meg-info", "meg-info-file", "eeg", "eeg-file",
+        "meg-channels", "meg-json", "meg-events", "meg-coordsystem", "meg-headshape",
+        "eeg-channels", "eeg-json", "eeg-events", "eeg-coordsystem", "eeg-electrodes",
+    }
+
+    assert expected <= set(dm.registry)
+
+
+def test_meg_applies_channel_types_bads_and_line_freq(sidecar_dm):
+    raw = sidecar_dm.load("01", "meg", **RUN)
+
+    assert raw.get_channel_types() == ["mag", "eeg", "eog"]
+    assert raw.info["bads"] == ["EEG001"]
+    assert raw.info["line_freq"] == 50
+
+
+def test_meg_report_lists_changes_and_skips(sidecar_dm):
+    report = sidecar_dm.load("01", "meg", **RUN).info["temp"]["bids_sidecars"]
+
+    assert report["files"]["channels"].name == "sub-01_ses-a_task-x_channels.tsv"
+    assert report["files"]["json"].name == "sub-01_ses-a_task-x_meg.json"
+    assert report["types"] == {"EEG061": ("eeg", "eog")}
+    assert report["bads"] == ["EEG001"]
+    assert report["line_freq"] == (60.0, 50)
+    assert report["skipped"] == {"CHPI001": "not in recording"}
+
+
+def test_meg_logs_when_something_changed(sidecar_dm, caplog):
+    with caplog.at_level("INFO", logger="fascicle"):
+        sidecar_dm.load("01", "meg", **RUN)
+
+    assert "1 type changes, 1 bads" in caplog.text
+
+
+def test_meg_file_is_untouched(sidecar_dm):
+    raw = sidecar_dm.load("01", "meg-file", **RUN)
+
+    assert raw.get_channel_types() == ["mag", "eeg", "eeg"]
+    assert raw.info["bads"] == []
+    assert "bids_sidecars" not in (raw.info.get("temp") or {})
+
+
+def test_meg_info_applies_sidecars_and_info_file_does_not(sidecar_dm, mne):
+    info = sidecar_dm.load("01", "meg-info", **RUN)
+    plain = sidecar_dm.load("01", "meg-info-file", **RUN)
+
+    assert isinstance(info, mne.Info)
+    assert info.get_channel_types() == ["mag", "eeg", "eog"]
+    assert info["bads"] == ["EEG001"]
+    assert plain.get_channel_types() == ["mag", "eeg", "eeg"]
+
+
+def test_meg_without_sidecars_loads_silently(bids_root, tmp_path, mne, caplog):
+    _write_meg(bids_root, mne)
+    manager = DatasetManager(bids_root)
+    mne_ext.register(manager, root_path=tmp_path / "mne")
+
+    with caplog.at_level("INFO", logger="fascicle"):
+        raw = manager.load("01", "meg", **RUN)
+
+    report = raw.info["temp"]["bids_sidecars"]
+    assert report["files"] == {"channels": None, "json": None}
+    assert raw.get_channel_types() == ["mag", "eeg", "eeg"]
+    assert caplog.text == ""
+
+
+def test_unknown_bids_type_is_skipped(sidecar_dm, bids_root):
+    channels = bids_root / "sub-01" / "ses-a" / "sub-01_ses-a_task-x_channels.tsv"
+    channels.write_text("name\ttype\nEEG061\tNOTATYPE\n")
+
+    raw = sidecar_dm.load("01", "meg", **RUN)
+
+    assert raw.get_channel_types()[2] == "eeg"
+    assert "NOTATYPE" in raw.info["temp"]["bids_sidecars"]["skipped"]["EEG061"]
+
+
+def test_sidecar_keys_load(sidecar_dm):
+    channels = sidecar_dm.load("01", "meg-channels", **RUN)
+    assert list(channels["name"]) == ["MEG0111", "EEG001", "EEG061", "CHPI001"]
+    assert sidecar_dm.load("01", "meg-json", **RUN) == {"PowerLineFrequency": 50}
+    assert sidecar_dm.load("01", "meg-coordsystem", session="a") == {"MEGCoordinateUnits": "mm"}
+    assert len(sidecar_dm.load("01", "meg-events", **RUN)) == 1
+    assert list(sidecar_dm.load("01", "eeg-electrodes", task="x")["name"]) == ["Fz"]
+
+
+def test_headshape_pos_skips_count_line(sidecar_dm):
+    points = sidecar_dm.load("01", "meg-headshape", session="a")
+
+    assert list(points.columns) == ["label", "x", "y", "z"]
+    assert list(points["label"]) == ["HP1", "EEG1"]
+    assert points.loc[1, ["x", "y", "z"]].tolist() == [4.0, 5.0, 6.0]
+
+
+# --- _apply_sidecars on its own (EEG, edge cases) ------------------------------
+
+
+def _eeg_case(tmp_path, channels, eeg_json=None, meg_json=None):
+    """A fake EEG recording path with sidecars next to it (the file itself isn't read)."""
+    root = tmp_path / "ds"
+    eeg = root / "sub-01" / "eeg"
+    eeg.mkdir(parents=True)
+    (root / "dataset_description.json").write_text("{}")
+    (eeg / "sub-01_task-x_channels.tsv").write_text("name\ttype\tstatus\n" + channels)
+    for kind, content in (("eeg", eeg_json), ("meg", meg_json)):
+        if content is not None:
+            (eeg / f"sub-01_task-x_{kind}.json").write_text(content)
+    return eeg / "sub-01_task-x_eeg.vhdr"
+
+
+def _eeg_info(mne, **fields):
+    info = mne.create_info(["Fz", "HEOG"], 100.0, "eeg")
+    for key, value in fields.items():
+        info[key] = value
+    return info
+
+
+def test_eeg_sidecars_use_eeg_json(tmp_path, mne):
+    path = _eeg_case(
+        tmp_path, "Fz\tEEG\tgood\nHEOG\teog\tgood\n",  # lower-case type
+        eeg_json='{"PowerLineFrequency": 50}', meg_json='{"PowerLineFrequency": 60}',
+    )
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne), path, "eeg")
+    report = info["temp"]["bids_sidecars"]
+
+    assert info.get_channel_types() == ["eeg", "eog"]
+    assert info["line_freq"] == 50
+    assert report["files"]["json"].name == "sub-01_task-x_eeg.json"
+
+
+def test_na_channel_type_is_not_reported_as_unknown(tmp_path, mne):
+    path = _eeg_case(tmp_path, "Fz\tn/a\tbad\nHEOG\tEOG\tgood\n")
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne), path, "eeg")
+    report = info["temp"]["bids_sidecars"]
+
+    assert report["skipped"] == {"Fz": "no type in channels.tsv"}
+    assert info.get_channel_types() == ["eeg", "eog"]
+    assert info["bads"] == ["Fz"]  # status still applied
+
+
+def test_missing_type_column_is_not_reported_as_unknown(tmp_path, mne):
+    path = _eeg_case(tmp_path, "")
+    (path.parent / "sub-01_task-x_channels.tsv").write_text("name\tstatus\nFz\tgood\n")
+
+    report = mne_ext._apply_sidecars(_eeg_info(mne), path, "eeg")["temp"]["bids_sidecars"]
+
+    assert report["skipped"] == {"Fz": "no type in channels.tsv"}
+
+
+def test_refused_type_change_is_recorded_and_others_still_apply(tmp_path, mne, monkeypatch):
+    path = _eeg_case(tmp_path, "Fz\tECG\tgood\nHEOG\tEOG\tgood\n")
+    original = mne.Info.set_channel_types
+
+    def refuse_fz(self, mapping, *args, **kwargs):
+        if "Fz" in mapping:
+            raise ValueError("not allowed")
+        return original(self, mapping, *args, **kwargs)
+
+    monkeypatch.setattr(mne.Info, "set_channel_types", refuse_fz)
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne), path, "eeg")
+    report = info["temp"]["bids_sidecars"]
+
+    assert "refused: not allowed" in report["skipped"]["Fz"]
+    assert report["types"] == {"HEOG": ("eeg", "eog")}
+    assert info.get_channel_types() == ["eeg", "eog"]
+
+
+def test_bad_already_in_file_is_not_added_twice(tmp_path, mne):
+    path = _eeg_case(tmp_path, "Fz\tEEG\tbad\nHEOG\tEEG\tgood\n")
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne, bads=["Fz"]), path, "eeg")
+
+    assert info["bads"] == ["Fz"]
+    assert info["temp"]["bids_sidecars"]["bads"] == []
+
+
+def test_existing_temp_entries_are_kept(tmp_path, mne):
+    path = _eeg_case(tmp_path, "Fz\tEEG\tgood\n")
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne, temp={"mine": 1}), path, "eeg")
+
+    assert info["temp"]["mine"] == 1
+    assert "bids_sidecars" in info["temp"]
+
+
+@pytest.mark.parametrize("value", ['"n/a"', "true"])
+def test_non_numeric_line_freq_is_ignored(tmp_path, mne, value):
+    path = _eeg_case(tmp_path, "Fz\tEEG\tgood\n", eeg_json=f'{{"PowerLineFrequency": {value}}}')
+
+    info = mne_ext._apply_sidecars(_eeg_info(mne), path, "eeg")
+
+    assert info["line_freq"] is None
+    assert info["temp"]["bids_sidecars"]["line_freq"] is None
+
+
+def test_matching_line_freq_is_not_a_change(tmp_path, mne, caplog):
+    path = _eeg_case(tmp_path, "Fz\tEEG\tgood\n", eeg_json='{"PowerLineFrequency": 50}')
+
+    with caplog.at_level("INFO", logger="fascicle"):
+        info = mne_ext._apply_sidecars(_eeg_info(mne, line_freq=50.0), path, "eeg")
+
+    assert info["temp"]["bids_sidecars"]["line_freq"] is None
+    assert caplog.text == ""
+
+
+def test_read_pos_skips_non_numeric_lines(tmp_path):
+    path = tmp_path / "sub-01_headshape.pos"
+    path.write_text("HP1 a b c\nHP2 1 2 3\nnot a point\n")
+
+    points = mne_ext._read_pos(path)
+
+    assert list(points["label"]) == ["HP2"]

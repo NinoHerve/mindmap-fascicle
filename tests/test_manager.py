@@ -619,7 +619,7 @@ def test_add_raw_several_matches_raise_and_list_candidates(raw_root):
     dm = DatasetManager(raw_root)
     dm.add_raw("eeg", "eeg")  # any extension: .vhdr, .eeg, .vmrk and .json all match
 
-    with pytest.raises(ValueError, match=r"Several raw files.*\.vmrk"):
+    with pytest.raises(ValueError, match=r"Several raw .eeg. files.*\.vmrk"):
         dm.get_path("01", "eeg", task="x")
 
 
@@ -665,3 +665,131 @@ def test_add_raw_describe(raw_root):
     assert info["root"] == raw_root
     assert info["namer"] == "raw_lookup('bar')"
     assert info["writer"] == "READ_ONLY"
+
+
+# --- sidecars of raw recordings (add_raw sidecar_of=) --------------------------
+
+
+def _meg_with_sidecar(raw_root, **sidecar):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif", ".ds"))
+    dm.add_raw("meg-channels", "channels", lambda p: p.name, extensions=(".tsv",),
+               sidecar_of="meg", **sidecar)
+    return dm
+
+
+def test_sidecar_inherited_from_session_level(raw_root):
+    channels = raw_root / "sub-01" / "ses-a" / "sub-01_ses-a_channels.tsv"
+    channels.touch()
+    dm = _meg_with_sidecar(raw_root)
+
+    assert dm.get_path("01", "meg-channels", session="a", task="x", run=1) == channels
+    assert dm.load("01", "meg-channels", session="a", task="x", run=1) == channels.name
+
+
+def test_sidecar_shared_by_several_recordings(raw_root):
+    channels = raw_root / "sub-01" / "ses-a" / "sub-01_ses-a_channels.tsv"
+    channels.touch()
+    dm = _meg_with_sidecar(raw_root)
+
+    # session="a" matches both the .fif run and the .ds recording
+    assert dm.get_path("01", "meg-channels", session="a") == channels
+
+
+def test_sidecar_differing_between_recordings_raises(raw_root):
+    meg = raw_root / "sub-01" / "ses-a" / "meg"
+    (meg / "sub-01_ses-a_task-x_channels.tsv").touch()
+    (meg / "sub-01_ses-a_task-y_channels.tsv").touch()
+    dm = _meg_with_sidecar(raw_root)
+
+    with pytest.raises(ValueError, match="different 'channels' sidecars"):
+        dm.get_path("01", "meg-channels", session="a")
+    assert dm.get_path("01", "meg-channels", session="a", task="y").name == (
+        "sub-01_ses-a_task-y_channels.tsv"
+    )
+
+
+def test_sidecar_missing_raises_file_not_found(raw_root):
+    dm = _meg_with_sidecar(raw_root)
+
+    with pytest.raises(FileNotFoundError, match="channels"):
+        dm.load("01", "meg-channels", session="a", task="x")
+
+
+def test_sidecar_of_must_be_a_raw_key(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("t1-sidecar", "T1w", extensions=(".json",), sidecar_of="T1w")
+
+    with pytest.raises(TypeError, match="add_raw"):
+        dm.get_path("01", "t1-sidecar")
+
+
+def test_sidecar_describe(raw_root):
+    dm = _meg_with_sidecar(raw_root)
+
+    assert dm.describe("meg-channels")["namer"] == "raw_sidecar('channels' of 'meg')"
+    assert dm.describe("meg-channels")["writer"] == "READ_ONLY"
+
+
+def test_add_raw_any_extension_returns_directory_recording(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg")
+
+    assert dm.get_path("01", "meg", session="a", task="y").name == "sub-01_ses-a_task-y_meg.ds"
+
+
+def test_directory_lookup_stops_at_raw_root(tmp_path):
+    root = tmp_path / "study_meg.ds"  # the raw root itself looks like a recording
+    meg = root / "sub-01" / "meg"
+    meg.mkdir(parents=True)
+    (root / "dataset_description.json").write_text('{"Name": "t", "BIDSVersion": "1.8.0"}')
+    (meg / "sub-01_task-x_meg.fif").touch()
+    dm = DatasetManager(root)
+    dm.add_raw("meg", "meg")
+
+    assert dm.get_path("01", "meg", task="x").name == "sub-01_task-x_meg.fif"
+
+
+def test_sidecar_extension_argument_picks_sidecar_extension(raw_root):
+    session = raw_root / "sub-01" / "ses-a"
+    (session / "sub-01_ses-a_channels.tsv").touch()
+    json_sidecar = session / "sub-01_ses-a_channels.json"
+    json_sidecar.write_text("{}")  # pybids parses json sidecars
+    dm = _meg_with_sidecar(raw_root)
+
+    assert dm.get_path("01", "meg-channels", session="a", task="x").suffix == ".tsv"
+    assert dm.get_path("01", "meg-channels", session="a", task="x", extension=".json") == (
+        json_sidecar
+    )
+
+
+def test_sidecar_missing_recording_names_recording_query(raw_root):
+    (raw_root / "sub-01" / "ses-a" / "sub-01_ses-a_channels.tsv").touch()
+    dm = _meg_with_sidecar(raw_root)
+
+    with pytest.raises(FileNotFoundError, match=r"'suffix': 'meg'.*'task': 'none'"):
+        dm.get_path("01", "meg-channels", session="a", task="none")
+
+
+def test_sidecar_of_unregistered_key_raises_key_error(raw_root):
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg-channels", "channels", extensions=(".tsv",), sidecar_of="nope")
+
+    with pytest.raises(KeyError, match="nope"):
+        dm.get_path("01", "meg-channels")
+
+
+def test_sidecar_follows_re_registered_recording_key(raw_root):
+    meg = raw_root / "sub-01" / "ses-a" / "meg"
+    (meg / "sub-01_ses-a_task-x_channels.tsv").touch()
+    ds_channels = meg / "sub-01_ses-a_task-y_channels.tsv"
+    ds_channels.touch()
+    dm = DatasetManager(raw_root)
+    dm.add_raw("meg", "meg", extensions=(".fif",))
+    dm.add_raw("meg-channels", "channels", extensions=(".tsv",), sidecar_of="meg")
+    with pytest.raises(FileNotFoundError):  # task y is only a .ds recording
+        dm.get_path("01", "meg-channels", session="a", task="y")
+
+    dm.add_raw("meg", "meg", extensions=(".ds",))
+
+    assert dm.get_path("01", "meg-channels", session="a", task="y") == ds_channels

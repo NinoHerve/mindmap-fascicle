@@ -24,7 +24,7 @@ from bids import BIDSLayout
 from . import formats
 from .config import read_config
 from .datatype import Datatype, RawDatatype
-from .utils import build_bids_path, parse_extension
+from .utils import build_bids_path, find_sidecar, parse_extension
 
 
 class DatasetManager:
@@ -216,6 +216,7 @@ class DatasetManager:
         *,
         extensions: tuple[str, ...] | None = None,
         filters: dict[str, Any] | None = None,
+        sidecar_of: str | None = None,
     ) -> str:
         """Register a read-only raw modality, found through the BIDS index.
 
@@ -249,53 +250,104 @@ class DatasetManager:
             `extension=` passed to `load`/`get_path` takes precedence.
         filters: dict, optional
             Extra pybids filters applied to every lookup.
+        sidecar_of: str, optional
+            Key of a raw recording registered with `add_raw`. The key then
+            names that recording's `suffix` sidecar, found by BIDS
+            inheritance (`fascicle.utils.find_sidecar`): the entities
+            select the recording(s), e.g.
+            `dm.add_raw("meg-channels", "channels", extensions=(".tsv",), sidecar_of="meg")`
+            finds a session-level `channels.tsv` from `run=1`. When several
+            recordings match, they must share the sidecar. `filters` don't
+            apply to sidecars.
 
         Returns the registry key used.
         """
         entry = RawDatatype(suffix, reader, tuple(extensions) if extensions else None,
-                            dict(filters) if filters else None)
-        dt = Datatype(self._raw_lookup(entry), reader, Datatype.READ_ONLY,
+                            dict(filters) if filters else None, sidecar_of)
+        lookup = self._sidecar_lookup if sidecar_of is not None else self._raw_lookup
+        dt = Datatype(lookup(entry), reader, Datatype.READ_ONLY,
                       ("any BIDS entity",), None, "raw")
         return self.add(key, dt)
+
+    def _find_raw(self, entry: RawDatatype, subject: str, entities: dict) -> set[Path]:
+        """Return every file in the BIDS index matching `entry` and `entities`.
+
+        Raises FileNotFoundError if there are none.
+        """
+        entities = dict(entities)
+        extensions = entities.pop("extension", None) or entry.extensions
+        if isinstance(extensions, str):
+            extensions = (extensions,)
+        query = {
+            "subject": str(subject).replace("sub-", ""),
+            **(entry.filters or {}),
+            **entities,
+        }
+        # pybids rejects extension=None, so only filter when there is one.
+        by_extension = {"extension": list(extensions)} if extensions else {}
+
+        try:
+            files = self.layout.get(
+                suffix=entry.suffix, return_type="file", **by_extension, **query
+            )
+            inside = self.layout.get(return_type="file", **query)
+        except ValueError as err:
+            raise ValueError(f"Invalid lookup for raw '{entry.suffix}': {err}") from err
+
+        folders = _recording_dirs(inside, entry.suffix, extensions, self.roots["raw"])
+        # Files inside a folder recording are part of it, not recordings of
+        # their own, even when named like one (CTF's `..._meg.ds/..._meg.meg4`).
+        found = {
+            Path(f) for f in files
+            if not any(folder in Path(f).resolve().parents for folder in folders)
+        }
+        found |= folders
+        if not found:
+            described = {"suffix": entry.suffix, **query, "extension": extensions}
+            raise FileNotFoundError(f"No raw file in the BIDS index for {described}.")
+        return found
 
     def _raw_lookup(self, entry: RawDatatype) -> Callable[..., Path]:
         """Return a namer finding `entry`'s file in the BIDS index."""
 
         def namer(root: Any, subject: str, **entities) -> Path:
-            extensions = entities.pop("extension", None) or entry.extensions
-            if isinstance(extensions, str):
-                extensions = (extensions,)
-            query = {
-                "subject": str(subject).replace("sub-", ""),
-                **(entry.filters or {}),
-                **entities,
-            }
-            described = {"suffix": entry.suffix, **query, "extension": extensions}
-            # pybids rejects extension=None, so only filter when there is one.
-            by_extension = {"extension": list(extensions)} if extensions else {}
-
-            try:
-                files = self.layout.get(
-                    suffix=entry.suffix, return_type="file", **by_extension, **query
-                )
-                inside = self.layout.get(return_type="file", **query)
-            except ValueError as err:
-                raise ValueError(f"Invalid lookup for raw '{entry.suffix}': {err}") from err
-
-            found = {Path(f) for f in files}
-            found |= _recording_dirs(inside, entry.suffix, extensions, self.roots["raw"])
-
-            if not found:
-                raise FileNotFoundError(f"No raw file in the BIDS index for {described}.")
+            found = self._find_raw(entry, subject, entities)
             if len(found) > 1:
                 names = sorted(str(p) for p in found)
                 raise ValueError(
-                    f"Several raw files match {described}: {names}. Pass extension= "
-                    "or more entities to pick one."
+                    f"Several raw '{entry.suffix}' files match {entities}: {names}. "
+                    "Pass extension= or more entities to pick one."
                 )
             return found.pop()
 
         namer.__name__ = f"raw_lookup({entry.suffix!r})"
+        namer.raw = entry
+        return namer
+
+    def _sidecar_lookup(self, entry: RawDatatype) -> Callable[..., Path]:
+        """Return a namer finding the `entry` sidecar of the `entry.sidecar_of` recording."""
+
+        def namer(root: Any, subject: str, **entities) -> Path:
+            extensions = entities.pop("extension", None) or entry.extensions
+            # Resolved at call time, so replacing the recording key is followed.
+            recording = getattr(self._entry(entry.sidecar_of).namer, "raw", None)
+            if recording is None:
+                raise TypeError(
+                    f"sidecar_of={entry.sidecar_of!r} must be a key registered with add_raw."
+                )
+
+            recordings = self._find_raw(recording, subject, entities)
+            sidecars = {find_sidecar(r, entry.suffix, extensions) for r in sorted(recordings)}
+            if len(sidecars) > 1:
+                names = sorted(str(p) for p in sidecars)
+                raise ValueError(
+                    f"The {len(recordings)} '{entry.sidecar_of}' recordings matching "
+                    f"{entities} have different '{entry.suffix}' sidecars: {names}. "
+                    "Pass more entities to pick one."
+                )
+            return sidecars.pop()
+
+        namer.__name__ = f"raw_sidecar({entry.suffix!r} of {entry.sidecar_of!r})"
         namer.raw = entry
         return namer
 

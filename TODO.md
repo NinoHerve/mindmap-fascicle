@@ -33,7 +33,15 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
     opening an 870 MB recording. E.g. a separate datatype `meg-info`, or a `reader`
     option.
   - Raw recordings should be read-only (`writer=Datatype.READ_ONLY`).
-- [ ] **Readers for the other BIDS-MEG/EEG sidecars.**
+- [x] **Readers for the other BIDS-MEG/EEG sidecars.** Done: one key per sidecar
+  (`meg-channels`, `meg-json`, `meg-events`, `meg-coordsystem`, `meg-headshape`, and the `eeg-`
+  ones plus `eeg-electrodes`). `meg`/`eeg`/`meg-info` now apply channel types and bads from
+  `channels.tsv` and `PowerLineFrequency` from the json, report it in
+  `info["temp"]["bids_sidecars"]`; `meg-file`/`eeg-file`/`meg-info-file` are the plain files.
+  In ds000117 this fixes `EEG061`-`064` (HEOG/VEOG/ECG/MISC, typed EEG in the `.fif`).
+  For FIF, `headshape.pos` matches the file's digitisation exactly, so it isn't applied.
+  Still open: `.hsp`/`.elp` headshapes; applying `electrodes.tsv` montages or events.
+  Original request:
   - `_headshape.pos` (and `.hsp`/`.elp`): no reader for `.pos`. In ds000117 it's plain
     text, `label x y z` in mm (`EEG1`..`EEG70`, `HP1`..`HP54`). A reader could return
     `{label: xyz}` or an `mne.channels.DigMontage`. The units and frame are in
@@ -42,8 +50,9 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
     Registering the suffix as a datatype is probably enough, but check.
   - `_coordsystem.json`: already loads as a dict through the default `.json` reader.
     Registering the suffix (`coordsystem`) would make it discoverable through `describe`.
-- [ ] **BIDS inheritance: files above the datatype folder aren't found.** Next step: build on
-  `add_raw` (index lookup) plus `layout.get_nearest` for sidecars.
+- [x] **BIDS inheritance: files above the datatype folder aren't found.** Done for raw keys:
+  `fascicle.utils.find_sidecar` and `add_raw(..., sidecar_of=...)`. Still open for
+  `bids_namer` keys such as `T1w` sidecars.
   - `channels.tsv` and `meg.json` sit at the session level (`ses-meg/`), which the BIDS
     inheritance principle allows. `bids_namer("channels")` builds
     `ses-meg/meg/..._channels.tsv`, which doesn't exist, so the load raises

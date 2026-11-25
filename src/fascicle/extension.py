@@ -132,4 +132,4 @@ def register_raw(dm, raw: dict[str, RawDatatype], *, overwrite: bool = False) ->
                 "Pass overwrite=True to replace it."
             )
         dm.add_raw(key, entry.suffix, entry.reader, extensions=entry.extensions,
-                   filters=entry.filters)
+                   filters=entry.filters, sidecar_of=entry.sidecar_of)

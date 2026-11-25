@@ -33,7 +33,7 @@ lh_coords, lh_faces = dm.load("01", "fs-pial", hemi="lh")
 
 mne.register(dm, root_path="/data/my_study/derivatives/mne")
 dm.save(cov, "01", "mne-cov", task="rest")       # sub-01/cov/sub-01_task-rest_cov.fif
-info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG, found in the BIDS index
+info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG, BIDS sidecars applied
 ```
 
 `dm.get_path(...)` takes the same arguments as `load` and returns the path without touching the file (except for raw modalities, below, which are looked up in the BIDS index).
@@ -48,6 +48,7 @@ info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG,
 
   A missing reader or writer means "use the one registered for the file extension". `dm.describe("fs-pial")` shows all of this for one key.
 - **Raw modalities**: data a toolbox reads from the raw dataset itself, rather than from its own derivatives folder (MEG/EEG for MNE, or a modality BIDS doesn't define yet). `dm.add_raw(key, suffix, reader, extensions=...)` registers one read-only key that finds the file in the pybids index, so it works for any BIDS-shaped name (`sub-01[_ses-a]_task-x_<suffix>.<ext>`) whatever its extension, matches `run=1` to `run-01`, and returns folder recordings such as CTF `.ds`. The key needn't be the suffix: MNE's `meg-info` reads the `meg` files with a different reader. Extensions list these in a `RAW` table of `RawDatatype`s, registered unprefixed with `register_raw`. For files whose names aren't BIDS-shaped, use `add_datatype(key, "raw", your_namer)`.
+- **Sidecars**: the small files describing a raw recording (`channels.tsv`, `meg.json`, `coordsystem.json`, ...), which BIDS lets sit higher up the tree (inheritance). `add_raw(key, suffix, sidecar_of="meg-file")` registers the `suffix` sidecar of a raw recording, found from the recording's entities by `fascicle.utils.find_sidecar`, e.g. a session-level `channels.tsv` from `run=1`. The MNE extension registers one key per sidecar (`meg-channels`, `meg-coordsystem`, ...), and its `meg`/`eeg`/`meg-info` keys apply the fields BIDS defines the same way everywhere: channel types and bad channels from `channels.tsv`, line frequency from `meg.json`. What changed is reported in `info["temp"]["bids_sidecars"]`; `meg-file`/`eeg-file`/`meg-info-file` return the file exactly as stored.
 - **File extensions**: `dm.ext_readers` / `dm.ext_writers` map extensions to default readers/writers: nibabel for images and tractograms (`.nii`, `.nii.gz`, `.mgh`, `.mgz`, `.gii`, `.trk`, `.tck`), the standard library for `.json` sidecars (read as dicts), numpy for `.bval`/`.bvec`, and pandas for `.tsv`/`.tsv.gz` tables (read as DataFrames, with BIDS's `n/a` as missing values).
 - **References**: single files outside any subject (templates, atlases, lookup tables) loaded with `load_ref`. Each reference is read by file extension unless you give it its own reader, with `add_reference(key, path, reader=...)` or, for references from the config file, `set_ref_reader(key, reader)`. References have no writer: they're inputs, not outputs.
 - **Config file** (optional): the declarative way to set up roots and references:
@@ -68,7 +69,7 @@ info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG,
 |---|---|---|
 | `fascicle.extensions.freesurfer` | `fs-t1`, `fs-brain`, `fs-orig`, `fs-aseg`, `fs-white`/`pial`/`inflated`/`sphere`, `fs-area`/`curv`/`thickness`/`sulc`, `fs-cortex` (read-only), `fs-ras2tkras` (read-only) | none |
 | `fascicle.extensions.charm` | `charm-seg`, `charm-t1` | none |
-| `fascicle.extensions.mne` | raw (unprefixed, read-only): `meg`, `eeg`, `meg-info`; derivatives: `mne-src`, `mne-fwd`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc` | `mne` |
+| `fascicle.extensions.mne` | raw (unprefixed, read-only): `meg`, `eeg`, `meg-info` (sidecars applied), `meg-file`, `eeg-file`, `meg-info-file` (as stored), sidecars `meg-`/`eeg-` + `channels`, `json`, `events`, `coordsystem`, plus `meg-headshape`, `eeg-electrodes`; derivatives: `mne-src`, `mne-fwd`, `mne-ave`, `mne-i-ave`, `mne-v-ave`, `mne-cov`, `mne-stc` | `mne` |
 
 Every extension has the same `register(dm, root_key=..., root_path=None, namespace=None, readers=None, writers=None)`. Keys are prefixed with `namespace`, which defaults to `root_key`; raw keys (MNE's `meg`, ...) aren't, and registering an extension twice keeps one set of them. To compare two FreeSurfer runs, register twice: `freesurfer.register(dm, root_key="fs_run2", root_path=...)` gives `fs_run2-t1`, ...
 
