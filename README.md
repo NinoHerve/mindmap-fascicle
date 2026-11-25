@@ -36,7 +36,7 @@ dm.save(cov, "01", "mne-cov", task="rest")       # sub-01/cov/sub-01_task-rest_c
 info = dm.load("01", "meg-info", session="meg", task="rest", run=1)   # raw MEG, BIDS sidecars applied
 ```
 
-`dm.get_path(...)` takes the same arguments as `load` and returns the path without touching the file (except for raw modalities, below, which are looked up in the BIDS index).
+`dm.get_path(...)` takes the same arguments as `load` and returns the path without touching the file (except for raw modalities, below, which are looked up in the BIDS index). Index entities (`run`, `echo`, ...) may be zero-padded to any width in BIDS, so raw keys find the file whatever its padding: `run=1` finds `run-01` or `run-001`. `save` writes a new file with the values as given (`run=1` → `run-1`, `run="01"` → `run-01`), and refuses to create `run-1` next to an existing `run-01`.
 
 ## Concepts
 

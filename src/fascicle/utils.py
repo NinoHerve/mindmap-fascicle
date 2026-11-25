@@ -1,12 +1,15 @@
 """Shared path/extension helpers used by the core manager and reader plugins.
 
 Holds parse_extension, check_file and a BIDS path helper, adapted from
-mindmap's `mindmap/io/utils.py`, plus find_sidecar (BIDS inheritance).
+mindmap's `mindmap/io/utils.py`, plus find_sidecar (BIDS inheritance) and
+find_padded (the same file under another zero-padding).
 """
 
 from pathlib import Path
 
 from bids.layout import parse_file_entities
+
+from .naming import BIDS_ENTITIES
 
 
 # Two-part extensions treated as one, e.g. BIDS's compressed images and
@@ -196,3 +199,44 @@ def _inheritance_folders(recording: Path) -> list[Path]:
     if subjects and subjects[-1] + 1 < len(parents):
         return parents[: subjects[-1] + 2]
     return parents[:1]
+
+
+# Filename keys of BIDS index entities (run, echo, ...), whose values are
+# integers that may be zero-padded to any width: run-1, run-01, run-001.
+_INDEX_KEYS = frozenset(key for _, key, fmt, _ in BIDS_ENTITIES if fmt == "index")
+
+
+def _filename_entities(name: str) -> tuple[dict[str, str | int], str, str]:
+    """Split a BIDS file name into (entities, suffix, extension).
+
+    Entities are keyed by their filename key (`ses`, `run`, ...). Index
+    values become `int`, so `run-01` and `run-1` give the same entities;
+    labels stay strings (`acq-01` and `acq-1` differ).
+    """
+    extension = parse_extension(name)
+    stem = name[: len(name) - len(extension)] if extension else name
+    *pairs, suffix = stem.split("_")
+    entities: dict[str, str | int] = {}
+    for pair in pairs:
+        key, _, value = pair.partition("-")
+        entities[key] = int(value) if key in _INDEX_KEYS and value.isdigit() else value
+    return entities, suffix, extension
+
+
+def find_padded(path: str | Path) -> list[Path]:
+    """Return the files next to `path` that are the same file, whatever the zero-padding.
+
+    A file matches when its suffix, extension and entities are those of
+    `path`, with index entities (`run`, `echo`, `flip`, `inv`, `split`,
+    `chunk`) compared as numbers: `sub-01_run-1_T1w.nii.gz` matches
+    `sub-01_run-01_T1w.nii.gz`. Reads the folder itself, not the pybids
+    index, so files written after the index was built are found.
+    """
+    path = Path(path)
+    if not path.parent.is_dir():
+        return []
+    wanted = _filename_entities(path.name)
+    return sorted(
+        other for other in path.parent.iterdir()
+        if other.name != path.name and _filename_entities(other.name) == wanted
+    )

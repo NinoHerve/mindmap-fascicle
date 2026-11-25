@@ -62,9 +62,12 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   - Suggested: for raw reads, fall back to the layout (`layout.get(...)` /
     `layout.get_nearest(...)`) when the built path doesn't exist, or resolve sidecars
     with pybids' inheritance (`get_metadata`-style lookup).
-- [ ] **The `run` entity isn't zero-padded to match the dataset.** Fixed for keys registered
-  with `add_raw` (`meg`, `eeg`, `meg-info`): the index stores runs as integers. Still open for
-  `bids_namer` keys such as `T1w`.
+- [x] **The `run` entity isn't zero-padded to match the dataset.** Done: `bids_namer` keys
+  (`T1w`, ...) find the same file under any zero-padding of any index entity
+  (`fascicle.utils.find_padded`), `save` writes values as given and won't duplicate a file
+  under another padding. `add_raw` keys match `run` through pybids. Still open: pybids
+  compares only `run` as a number (`echo`/`flip`/`inv`/`chunk` are strings, `split` isn't
+  parsed), so `add_raw` lookups with e.g. MEG `split-01` would need the same treatment.
   - `get_path(..., run=1)` builds `..._run-1_meg.fif`, but ds000117 names it `run-01`.
     The path is wrong, and the error only says "No file for 'meg'".
   - `run="01"` works, so it's a usability issue, not wrong data: BIDS allows both forms,

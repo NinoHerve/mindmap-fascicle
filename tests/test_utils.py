@@ -1,8 +1,15 @@
-"""Tests for fascicle.utils: parse_extension, check_file, build_bids_path, find_sidecar."""
+"""Tests for fascicle.utils: paths, extensions, find_sidecar and find_padded."""
 
 import pytest
 
-from fascicle.utils import build_bids_path, check_file, find_sidecar, parse_extension
+from fascicle.utils import (
+    _filename_entities,
+    build_bids_path,
+    check_file,
+    find_padded,
+    find_sidecar,
+    parse_extension,
+)
 
 
 class _FakeLayout:
@@ -240,3 +247,49 @@ def test_find_sidecar_skips_folder_named_like_a_sidecar(dataset):
 
     with pytest.raises(FileNotFoundError):
         find_sidecar(recording, "channels", ".tsv")
+
+
+# --- zero-padding of index entities (find_padded) ------------------------------
+
+
+def test_filename_entities_reads_index_values_as_numbers():
+    entities, suffix, extension = _filename_entities("sub-01_ses-a_run-001_echo-2_T1w.nii.gz")
+
+    assert entities == {"sub": "01", "ses": "a", "run": 1, "echo": 2}
+    assert (suffix, extension) == ("T1w", ".nii.gz")
+
+
+def _anat(tmp_path, *names):
+    anat = tmp_path / "sub-01" / "anat"
+    anat.mkdir(parents=True)
+    for name in names:
+        (anat / name).touch()
+    return anat
+
+
+def test_find_padded_matches_other_padding(tmp_path):
+    anat = _anat(tmp_path, "sub-01_run-01_T1w.nii.gz")
+
+    assert find_padded(anat / "sub-01_run-1_T1w.nii.gz") == [anat / "sub-01_run-01_T1w.nii.gz"]
+
+
+def test_find_padded_ignores_sidecar_with_other_extension(tmp_path):
+    anat = _anat(tmp_path, "sub-01_run-01_T1w.json")
+
+    assert find_padded(anat / "sub-01_run-1_T1w.nii.gz") == []
+
+
+def test_find_padded_requires_the_same_entities(tmp_path):
+    anat = _anat(tmp_path, "sub-01_acq-x_run-01_T1w.nii.gz")
+
+    assert find_padded(anat / "sub-01_run-1_T1w.nii.gz") == []
+
+
+def test_find_padded_does_not_pad_labels(tmp_path):
+    anat = _anat(tmp_path, "sub-01_acq-01_T1w.nii.gz")
+
+    assert find_padded(anat / "sub-01_acq-1_T1w.nii.gz") == []
+
+
+def test_find_padded_missing_folder(tmp_path):
+    assert find_padded(tmp_path / "nope" / "sub-01_run-1_T1w.nii.gz") == []

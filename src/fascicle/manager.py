@@ -24,7 +24,7 @@ from bids import BIDSLayout
 from . import formats
 from .config import read_config
 from .datatype import Datatype, RawDatatype
-from .utils import build_bids_path, find_sidecar, parse_extension
+from .utils import build_bids_path, find_padded, find_sidecar, parse_extension
 
 
 class DatasetManager:
@@ -200,12 +200,18 @@ class DatasetManager:
 
         e.g. `dm.add_datatype("bold", "raw", dm.bids_namer("bold"))`, then
         `dm.load("01", "bold", session="test", task="rest")`.
+
+        Index entities (`run`, `echo`, ...) are written as given: `run=1`
+        builds `run-1`. When that file doesn't exist, `get_path` (and so
+        `load` and `save`) uses the same file under another zero-padding
+        (`run-01`, `run-001`) if there is one.
         """
 
         def namer(root: Any, subject: str, **entities) -> Path:
             return Path(build_bids_path(self.layout, subject, suffix, **entities))
 
         namer.__name__ = f"bids_namer({suffix!r})"
+        namer.padding_lookup = True
         return namer
 
     def add_raw(
@@ -358,13 +364,31 @@ class DatasetManager:
     def get_path(self, subject: str, key: str, **inputs) -> Path:
         """Build the path of datatype `key` for `subject`.
 
-        Doesn't check that the file exists, except for raw modalities
-        registered with `add_raw`: those are looked up in the BIDS index,
-        so a missing file raises `FileNotFoundError`.
+        Doesn't check that the file exists, with two exceptions:
+
+        - raw modalities registered with `add_raw` are looked up in the BIDS
+          index, so a missing file raises `FileNotFoundError`;
+        - for `bids_namer` keys (`T1w`, ...), if the built path doesn't
+          exist but the same file does under another zero-padding
+          (`run-01` for `run=1`), that file is returned. Several such files
+          raise `ValueError`.
         """
         dt = self._entry(key)
         root = self.roots[dt.root_key] if dt.root_key is not None else None
-        return Path(dt.namer(root, subject, **inputs))
+        path = Path(dt.namer(root, subject, **inputs))
+
+        if getattr(dt.namer, "padding_lookup", False) and not path.exists():
+            padded = find_padded(path)
+            if len(padded) > 1:
+                names = sorted(p.name for p in padded)
+                raise ValueError(
+                    f"Several files for '{key}' have the same entities as {path.name} "
+                    f"with a different zero-padding: {names}. Pass the value as written "
+                    "in the file name (e.g. run='01') to pick one."
+                )
+            if padded:
+                return padded[0]
+        return path
 
     def load(self, subject: str, key: str, **inputs) -> Any:
         """Build the path of datatype `key` for `subject` and read it."""
@@ -375,7 +399,11 @@ class DatasetManager:
         path = self.get_path(subject, key, **inputs)
 
         if not self._exists(dt, path):
-            raise FileNotFoundError(f"No file for '{key}' (sub-{subject}) at: {path}")
+            padding = (
+                " (nor with the same entities under another zero-padding)"
+                if getattr(dt.namer, "padding_lookup", False) else ""
+            )
+            raise FileNotFoundError(f"No file for '{key}' (sub-{subject}) at: {path}{padding}")
 
         reader = dt.reader or self.load_by_extension
         return reader(path)

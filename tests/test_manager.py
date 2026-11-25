@@ -793,3 +793,93 @@ def test_sidecar_follows_re_registered_recording_key(raw_root):
     dm.add_raw("meg", "meg", extensions=(".ds",))
 
     assert dm.get_path("01", "meg-channels", session="a", task="y") == ds_channels
+
+
+# --- zero-padding of index entities (bids_namer keys) --------------------------
+
+
+def _write_t1w(bids_root, name, value=0.0):
+    path = bids_root / "sub-01" / "anat" / name
+    nib.save(nib.Nifti1Image(np.full((2, 3, 4), value, dtype=np.float32), np.eye(4)), path)
+    return path
+
+
+@pytest.mark.parametrize("written", ["run-01", "run-001"])
+def test_run_number_finds_padded_file(bids_root, written):
+    path = _write_t1w(bids_root, f"sub-01_{written}_T1w.nii.gz", 3.0)
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", run=1) == path
+    np.testing.assert_array_equal(dm.load("01", "T1w", run=1).get_fdata(), 3.0)
+
+
+def test_padded_value_finds_unpadded_file(bids_root):
+    path = _write_t1w(bids_root, "sub-01_run-1_T1w.nii.gz")
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", run="01") == path
+
+
+def test_echo_padding_found_beyond_run(bids_root):
+    func = bids_root / "sub-01" / "func"
+    func.mkdir()
+    bold = func / "sub-01_task-rest_run-1_echo-01_bold.nii.gz"
+    bold.touch()
+    dm = DatasetManager(bids_root)
+    dm.add_datatype("bold", "raw", dm.bids_namer("bold"))
+
+    assert dm.get_path("01", "bold", task="rest", run=1, echo=1) == bold
+
+
+def test_get_path_without_any_match_returns_built_path(bids_root):
+    dm = DatasetManager(bids_root)
+
+    assert dm.get_path("01", "T1w", run=7).name == "sub-01_run-7_T1w.nii.gz"
+
+
+def test_several_paddings_of_one_file_raise(bids_root):
+    _write_t1w(bids_root, "sub-01_run-01_T1w.nii.gz")
+    _write_t1w(bids_root, "sub-01_run-001_T1w.nii.gz")
+    dm = DatasetManager(bids_root)
+
+    with pytest.raises(ValueError, match=r"run-001.*run-01"):
+        dm.get_path("01", "T1w", run=1)
+
+
+def test_padded_file_written_after_manager_is_found(bids_root):
+    dm = DatasetManager(bids_root)
+    path = _write_t1w(bids_root, "sub-01_run-02_T1w.nii.gz")
+
+    assert dm.get_path("01", "T1w", run=2) == path
+
+
+@pytest.mark.parametrize(
+    "run, name", [(1, "sub-01_run-1_T1w.nii.gz"), ("01", "sub-01_run-01_T1w.nii.gz")]
+)
+def test_save_new_file_writes_value_as_given(bids_root, run, name):
+    dm = DatasetManager(bids_root)
+
+    path = dm.save(nib.Nifti1Image(np.zeros((2, 3, 4)), np.eye(4)), "01", "T1w", run=run)
+
+    assert path.name == name
+
+
+def test_save_does_not_duplicate_file_under_other_padding(bids_root):
+    existing = _write_t1w(bids_root, "sub-01_run-01_T1w.nii.gz")
+    dm = DatasetManager(bids_root)
+    img = nib.Nifti1Image(np.full((2, 3, 4), 5.0, dtype=np.float32), np.eye(4))
+
+    with pytest.raises(FileExistsError, match="run-01"):
+        dm.save(img, "01", "T1w", run=1)
+    path = dm.save(img, "01", "T1w", run=1, overwrite=True)
+
+    assert path == existing
+    assert not (existing.parent / "sub-01_run-1_T1w.nii.gz").exists()
+    np.testing.assert_array_equal(nib.load(existing).get_fdata(), 5.0)
+
+
+def test_missing_file_message_mentions_padding(bids_root):
+    dm = DatasetManager(bids_root)
+
+    with pytest.raises(FileNotFoundError, match="zero-padding"):
+        dm.load("01", "T1w", run=9)
