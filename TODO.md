@@ -78,7 +78,7 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
 
 ## Requests from the mindmap-bem manuscript (2026-11-25, release 0.2.0)
 
-- [ ] **`sub-` prefix handled differently by core and extension keys.** The FreeSurfer, charm
+- [x] **`sub-` prefix handled differently by core and extension keys.** (fixed in 0.3.0) The FreeSurfer, charm
   and raw (`add_raw`) namers strip a `sub-` prefix, so `"sub-01"` and `"01"` both work. The core
   `bids_namer` keys and `load` don't:
   - `dm.get_path("sub-01", "T1w", session="mri", acquisition="mprage")` builds
@@ -103,12 +103,19 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
   - New `fascicle.extensions.mindmap` (default prefix `mm`), starting with mindmap-bem's
     surfaces: `mm-iskull`, `mm-oskull`, `mm-skin`.
   - Read as `(coords, faces)`; saving accepts `(coords, faces, volume_info)` and keeps it.
-- [ ] **Manuscript:** replace the local `BEM_DATATYPES` in `processing/common.py` with
+- [x] **Manuscript:** replace the local `BEM_DATATYPES` in `processing/common.py` with
   `freesurfer.register(...)` per MNE BEM method and `mindmap.register(...)`, and drop the
   `label("sub-01")` workarounds. Its `head` (`sub-XX-head.fif`) and `t1` keys aren't in
-  fascicle.
+  fascicle. Done in the manuscript with 0.3.0: `watershed-head` and `fs-done`
+  (`scripts/recon-all.done`) stay local `add_datatype` keys.
+- [ ] **MNE `trans` and BEM head keys in the MNE extension.** The manuscript's coregistration
+  writes `sub-XX/sub-XX-trans.fif` (in an MNE subjects dir) with a local `add_datatype` key
+  (`coreg-trans`, read/written with `mne.read_trans` / `mne.write_trans(..., overwrite=True)`),
+  and reads `bem/sub-XX-head-dense.fif` / `bem/sub-XX-head.fif` (`mne.read_bem_surfaces`) with
+  local keys too (`coreg-head`, `watershed-head`). Suggested: `trans` (read/write) and `head`,
+  `head-dense` (read-only) in `fascicle.extensions.mne`, on a subjects-dir root.
 
 ## Notes
 
-- Version used by the manuscript: 0.2.0 from PyPI (pinned, `[mne]`), no longer an editable
+- Version used by the manuscript: 0.3.0 from PyPI (pinned, `[mne]`), no longer an editable
   install of this checkout.
