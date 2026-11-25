@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # install the built wheel, as users get it from PyPI, not the source tree;
+      # with the mne extra, so the MNE tests run instead of being skipped
+      - name: Build and install
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          pip install "$(ls dist/*.whl)[test,mne]"
+
+      - name: Run tests
+        run: |
+          pip list | grep -iE "^(numpy|pandas|nibabel|pybids|mne) "
+          pytest -v

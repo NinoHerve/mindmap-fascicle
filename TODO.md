@@ -76,7 +76,20 @@ sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
     stores runs as integers, and use the indexed file. Otherwise mention the padding in
     the error message.
 
+## Requests from the mindmap-bem manuscript (2026-11-25, release 0.2.0)
+
+- [ ] **`sub-` prefix handled differently by core and extension keys.** The FreeSurfer, charm
+  and raw (`add_raw`) namers strip a `sub-` prefix, so `"sub-01"` and `"01"` both work. The core
+  `bids_namer` keys and `load` don't:
+  - `dm.get_path("sub-01", "T1w", session="mri", acquisition="mprage")` builds
+    `sub-sub-01/ses-mri/anat/sub-sub-01_ses-mri_acq-mprage_T1w.nii.gz`;
+  - `dm.load("sub-01", "meg-coordsystem", session="meg")` raises
+    `Subject sub-sub-01 does not exist in dataset.`, even though `get_path` finds the file.
+  - Suggested: strip `sub-` once, at the top of `get_path`/`load`/`save`, so every key
+    accepts both forms. Alternatively, reject `sub-` everywhere with a clear error.
+  - Manuscript workaround: it passes bare labels (`common.label()`).
+
 ## Notes
 
-- Version tested: 0.1.0 (`pyproject.toml`). The manuscript keeps an editable install of this
-  checkout until it pins a release.
+- Version used by the manuscript: 0.2.0 from PyPI (pinned, `[mne]`), no longer an editable
+  install of this checkout.
